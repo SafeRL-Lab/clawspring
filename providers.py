@@ -393,9 +393,11 @@ def stream_openai_compat(
         "messages": oai_messages,
         "stream":   True,
     }
-    if tool_schemas:
+    if tool_schemas and not config.get("no_tools"):
         kwargs["tools"] = tools_to_openai(tool_schemas)
-        kwargs["tool_choice"] = "auto"
+        # "auto" requires vLLM --enable-auto-tool-choice; omit if server doesn't support it
+        if not config.get("disable_tool_choice"):
+            kwargs["tool_choice"] = "auto"
     if config.get("max_tokens"):
         kwargs["max_tokens"] = config["max_tokens"]
 
@@ -469,10 +471,17 @@ def stream(
     if prov["type"] == "anthropic":
         yield from stream_anthropic(api_key, model_name, system, messages, tool_schemas, config)
     else:
-        base_url = (
-            config.get("custom_base_url") if provider_name == "custom"
-            else prov.get("base_url", "https://api.openai.com/v1")
-        )
+        import os as _os
+        if provider_name == "custom":
+            base_url = (config.get("custom_base_url")
+                        or _os.environ.get("CUSTOM_BASE_URL", ""))
+            if not base_url:
+                raise ValueError(
+                    "custom provider requires a base_url. "
+                    "Set CUSTOM_BASE_URL env var or run: /config custom_base_url=http://..."
+                )
+        else:
+            base_url = prov.get("base_url", "https://api.openai.com/v1")
         yield from stream_openai_compat(
             api_key, base_url, model_name, system, messages, tool_schemas, config
         )
