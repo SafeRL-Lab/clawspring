@@ -1,17 +1,11 @@
-# Nano Claude Code
 
-![demo](demo.gif)
-
-A minimal Python implementation of Claude Code in ~1300 lines, supporting Claude, GPT, Gemini, Kimi, Qwen, Zhipu, DeepSeek, and local open-source models via Ollama or any OpenAI-compatible endpoint.
-
----
 
 <div align="center">
   <a href="https://github.com/SafeRL-Lab/nano-claude-code">
     <img src="https://github.com/SafeRL-Lab/nano-claude-code/blob/main/docs/demo.gif" alt="Logo" width="800"> 
   </a>
   
-<h1 align="center" style="font-size: 30px;"><strong><em>Nano Claude Code</em></strong>: A Minimal Python Reimplementation (~1000 Lines)</h1>
+<h1 align="center" style="font-size: 30px;"><strong><em>Nano Claude Code</em></strong>: A Minimal Python Reimplementation (~1300 Lines)</h1>
 <p align="center">
     <a href="https://github.com/chauncygu/collection-claude-code-source-code">The newest source of Claude Code</a>
     ·
@@ -19,12 +13,18 @@ A minimal Python implementation of Claude Code in ~1300 lines, supporting Claude
   </p>
 </div>
 
+
+## 🔥🔥🔥 News (Pacific Time)
+- Apr 01, 2026: Support more closed-source models and open-source models.
+
+
 # Nano Claude Code
 
-A minimal Python implementation of Claude Code (~920 lines total), covering all core features.
+![demo](demo.gif)
 
+A minimal Python implementation of Claude Code in ~1300 lines, supporting Claude, GPT, Gemini, Kimi, Qwen, Zhipu, DeepSeek, and local open-source models via Ollama or any OpenAI-compatible endpoint.
 
-
+---
 
 
 ## Features
