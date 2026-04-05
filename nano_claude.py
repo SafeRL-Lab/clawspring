@@ -1613,13 +1613,52 @@ def repl(config: dict, initial_prompt: str = None):
             print()
         return
 
+    def _read_input(prompt: str) -> str:
+        """Read user input with multi-line paste detection.
+        
+        When text is pasted from clipboard, all lines arrive in stdin nearly
+        simultaneously. After the first input() returns, we check if more data
+        is buffered and absorb it into a single string — preventing the REPL
+        from treating each pasted line as a separate query.
+        """
+        import time as _t
+        first_line = input(prompt)
+        lines = [first_line]
+        
+        if sys.platform == "win32":
+            import msvcrt
+            _t.sleep(0.05)  # let paste buffer fill
+            while msvcrt.kbhit():
+                try:
+                    extra = input()
+                    lines.append(extra)
+                except EOFError:
+                    break
+                _t.sleep(0.01)
+        else:
+            import select
+            _t.sleep(0.05)
+            while select.select([sys.stdin], [], [], 0.02)[0]:
+                try:
+                    extra = sys.stdin.readline()
+                    if not extra:
+                        break
+                    lines.append(extra.rstrip("\n"))
+                except EOFError:
+                    break
+        
+        combined = "\n".join(lines).strip()
+        if len(lines) > 1:
+            info(f"(pasted {len(lines)} lines)")
+        return combined
+
     while True:
         # Show notifications for background agents that finished
         _print_background_notifications()
         try:
             cwd_short = Path.cwd().name
             prompt = clr(f"\n[{cwd_short}] ", "dim") + clr("❯ ", "cyan", "bold")
-            user_input = input(prompt).strip()
+            user_input = _read_input(prompt)
         except (EOFError, KeyboardInterrupt):
             print()
             try:
