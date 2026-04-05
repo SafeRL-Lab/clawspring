@@ -29,6 +29,7 @@ English | [中文](https://github.com/SafeRL-Lab/nano-claude-code/blob/main/docs
 
 
 ## 🔥🔥🔥 News (Pacific Time)
+- 11:00 AM, Apr 05, 2026: **v3.05.3** — Added GitHub Gist cloud sync: `/cloudsave setup <token>` to configure, `/cloudsave` to upload the current session to a private Gist, `/cloudsave auto on` to sync automatically on `/exit`, `/cloudsave list` to browse cloud sessions, and `/cloudsave load <id>` to restore from the cloud. Uses stdlib `urllib` — no new dependencies. Also added version number (`v3.05.2`) in the startup banner.
 - 09:01 AM, Apr 05, 2026: **v3.05.2** — Introduced `/proactive [duration]` command: a background daemon thread watches for user inactivity and automatically wakes the agent up after the specified interval (e.g. `/proactive 5m`), enabling continuous monitoring loops without user intervention. `/proactive` with no args now shows current status; `/proactive off` disables it explicitly. Proactive polling state is stored in `config` (no module-level globals). Watcher exceptions are logged via `traceback` instead of silently swallowed. Also fixed duplicated output in Rich-enabled terminals by buffering text during streaming and rendering Markdown once via `rich.live.Live` — updates happen in-place for a true streaming Markdown experience. The startup banner now displays the current version number (v3.05.2) in green, making it easy to identify which version is running at a glance.
 - 10:51 PM, Apr 04, 2026: **v3.05_fix04** — Fixed a crash on `/model` and config save commands caused by the newly introduced `_run_query_callback` being serialized to JSON; also added `SleepTimer` usage    
   guidance to the system prompt so the agent knows when to invoke background timers proactively.
@@ -80,6 +81,7 @@ Nano Claude Code: **A Lightweight** and **Easy-to-Use** Python Reimplementation 
   * [Diff View](#diff-view)
   * [CLAUDE.md Support](#claudemd-support)
   * [Session Management](#session-management)
+  * [Cloud Sync (GitHub Gist)](#cloud-sync-github-gist)
   * [Project Structure](#project-structure)
   * [FAQ](#faq)
 
@@ -100,7 +102,7 @@ Claude Code is a powerful, production-grade AI coding assistant — but its sour
 | Source files | ~1,332 TS/TSX files | 51 Python files |
 | Lines of code | ~283K | ~11.6K |
 | Built-in tools | 44+ | 25 |
-| Slash commands | 88 | 19 |
+| Slash commands | 88 | 20 |
 | Voice input | Proprietary Anthropic WebSocket (OAuth required) | Local Whisper / OpenAI API — works offline, no subscription |
 | Model providers | Anthropic only | 7+ (Anthropic · OpenAI · Gemini · Kimi · Qwen · DeepSeek · Ollama · …) |
 | Local models | No | Yes — Ollama, LM Studio, vLLM, any OpenAI-compatible endpoint |
@@ -128,6 +130,7 @@ Claude Code is a powerful, production-grade AI coding assistant — but its sour
 - **Notebook editing** — `NotebookEdit` directly manipulates `.ipynb` JSON (replace/insert/delete cells) with no kernel required.
 - **Diagnostics without LSP server** — `GetDiagnostics` chains pyright → mypy → flake8 → py_compile for Python and tsc/shellcheck for other languages, with zero configuration.
 - **Offline voice input** — `/voice` records via `sounddevice`/`arecord`/SoX, transcribes with local `faster-whisper` (no API key, no subscription), and auto-submits. Keyterms from your git branch and project files boost coding-term accuracy.
+- **Cloud session sync** — `/cloudsave` backs up conversations to private GitHub Gists with zero extra dependencies; restore any past session on any machine with `/cloudsave load <id>`.
 - **Proactive background monitoring** — `/proactive 5m` activates a sentinel daemon that wakes the agent automatically after a period of inactivity, enabling continuous monitoring loops, scheduled checks, or trading bots without user prompts.
 - **Rich Live streaming rendering** — When `rich` is installed, responses stream as live-updating Markdown in place (no duplicate raw text), with clean tool-call interleaving.
 
@@ -182,6 +185,7 @@ Claude Code is a powerful, production-grade AI coding assistant — but its sour
 | Rich Live streaming | When `rich` is installed, responses render as live-updating Markdown in place — no duplicate raw text, clean tool-call interleaving |
 | Context injection | Auto-loads `CLAUDE.md`, git status, cwd, persistent memory |
 | Session persistence | Save / load conversations to `~/.nano_claude/sessions/`; **autosave on exit** + `/resume` to instantly restore last session |
+| Cloud sync | `/cloudsave` syncs sessions to private GitHub Gists; auto-sync on exit; load from cloud by Gist ID. No new dependencies (stdlib `urllib`). |
 | Extended Thinking | Toggle on/off (Claude models only) |
 | Cost tracking | Token usage + estimated USD cost |
 | Non-interactive mode | `--print` flag for scripting / CI |
@@ -602,6 +606,12 @@ Type `/` and press **Tab** to autocomplete.
 | `/proactive` | Show current proactive polling status (ON/OFF and interval) |
 | `/proactive <duration>` | Enable background sentinel polling (e.g. `5m`, `30s`, `1h`) |
 | `/proactive off` | Disable background polling |
+| `/cloudsave setup <token>` | Configure GitHub Personal Access Token for Gist sync |
+| `/cloudsave` | Upload current session to a private GitHub Gist |
+| `/cloudsave push [desc]` | Upload with an optional description |
+| `/cloudsave auto on\|off` | Toggle auto-upload on `/exit` |
+| `/cloudsave list` | List your nano-claude-code Gists |
+| `/cloudsave load <gist_id>` | Download and restore a session from Gist |
 | `/exit` / `/quit` | Exit |
 
 **Switching models inside a session:**
@@ -1415,6 +1425,70 @@ You can also resume a specific file:
 
 ---
 
+## Cloud Sync (GitHub Gist)
+
+Nano Claude Code v3.05.3 adds optional cloud backup of conversation sessions via **GitHub Gist**. Sessions are stored as private Gists (JSON), browsable in the GitHub UI. No extra dependencies — uses Python's stdlib `urllib`.
+
+### Setup (one-time)
+
+1. Go to [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**
+2. Enable the **`gist`** scope
+3. Copy the token and run:
+
+```
+[myproject] ❯ /cloudsave setup ghp_xxxxxxxxxxxxxxxxxxxx
+✓ GitHub token saved (logged in as: Chauncygu). Cloud sync is ready.
+```
+
+### Upload a session
+
+```
+[myproject] ❯ /cloudsave
+Uploading session to GitHub Gist…
+✓ Session uploaded → https://gist.github.com/abc123def456
+```
+
+Add an optional description:
+
+```
+[myproject] ❯ /cloudsave push auth refactor debug session
+```
+
+### Auto-sync on exit
+
+```
+[myproject] ❯ /cloudsave auto on
+✓ Auto cloud-sync ON — session will be uploaded to Gist on /exit.
+```
+
+From that point on, every `/exit` or `/quit` automatically uploads the session before closing.
+
+### Browse and restore
+
+```
+[myproject] ❯ /cloudsave list
+  Found 3 session(s):
+  abc123de…  2026-04-05 11:02  auth refactor debug session
+  7f9e12ab…  2026-04-04 22:18  proactive monitoring test
+  3b4c5d6e…  2026-04-04 18:31
+
+[myproject] ❯ /cloudsave load abc123de...full-gist-id...
+✓ Session loaded from Gist (42 messages).
+```
+
+### Commands reference
+
+| Command | Description |
+|---|---|
+| `/cloudsave setup <token>` | Save GitHub token (needs `gist` scope) |
+| `/cloudsave` | Upload current session to a new or existing Gist |
+| `/cloudsave push [desc]` | Upload with optional description |
+| `/cloudsave auto on\|off` | Toggle auto-upload on exit |
+| `/cloudsave list` | List all nano-claude-code Gists |
+| `/cloudsave load <gist_id>` | Download and restore a session |
+
+---
+
 ## Project Structure
 
 ```
@@ -1427,6 +1501,7 @@ nano_claude_code/
 ├── compaction.py         # Context compression: snip + auto-summarize
 ├── context.py            # System prompt builder: CLAUDE.md + git + memory
 ├── config.py             # Config load/save/defaults
+├── cloudsave.py          # GitHub Gist cloud sync (upload/download/list sessions)
 │
 ├── multi_agent/          # Multi-agent package
 │   ├── __init__.py       # Re-exports

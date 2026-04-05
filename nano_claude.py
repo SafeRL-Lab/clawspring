@@ -48,6 +48,14 @@ Slash commands in REPL:
   /voice            Record voice input, transcribe, and submit
   /voice status     Show available recording and STT backends
   /voice lang <code>  Set STT language (e.g. zh, en, ja — default: auto)
+  /proactive [dur]  Background sentinel polling (e.g. /proactive 5m)
+  /proactive off    Disable proactive polling
+  /cloudsave setup <token>   Configure GitHub token for cloud sync
+  /cloudsave        Upload current session to GitHub Gist
+  /cloudsave push [desc]     Upload with optional description
+  /cloudsave auto on|off     Toggle auto-upload on exit
+  /cloudsave list   List your nano-claude-code Gists
+  /cloudsave load <gist_id>  Download and load a session from Gist
   /exit /quit Exit
 """
 from __future__ import annotations
@@ -538,9 +546,156 @@ def cmd_cwd(args: str, _state, _config) -> bool:
             err(str(e))
     return True
 
+def _build_session_data(state) -> dict:
+    """Serialize current conversation state to a JSON-serializable dict."""
+    return {
+        "messages": [
+            m if not isinstance(m.get("content"), list) else
+            {**m, "content": [
+                b if isinstance(b, dict) else b.model_dump()
+                for b in m["content"]
+            ]}
+            for m in state.messages
+        ],
+        "turn_count": state.turn_count,
+        "total_input_tokens": state.total_input_tokens,
+        "total_output_tokens": state.total_output_tokens,
+    }
+
+
+def cmd_cloudsave(args: str, state, config) -> bool:
+    """Sync sessions to GitHub Gist.
+
+    /cloudsave setup <token>   — configure GitHub Personal Access Token
+    /cloudsave                 — upload current session to Gist
+    /cloudsave push [desc]     — same as above with optional description
+    /cloudsave auto on|off     — toggle auto-upload on /exit
+    /cloudsave list            — list your nano-claude-code Gists
+    /cloudsave load <gist_id>  — download and load a session from Gist
+    """
+    from cloudsave import validate_token, upload_session, list_sessions, download_session
+    from config import save_config
+
+    parts = args.strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+
+    token = config.get("gist_token", "")
+
+    # ── setup ──────────────────────────────────────────────────────────────────
+    if sub == "setup":
+        if not rest:
+            err("Usage: /cloudsave setup <GitHub_Personal_Access_Token>")
+            return True
+        new_token = rest.strip()
+        info("Validating token…")
+        valid, msg = validate_token(new_token)
+        if not valid:
+            err(msg)
+            return True
+        config["gist_token"] = new_token
+        save_config(config)
+        ok(f"GitHub token saved (logged in as: {msg}). Cloud sync is ready.")
+        return True
+
+    # ── auto on/off ────────────────────────────────────────────────────────────
+    if sub == "auto":
+        flag = rest.strip().lower()
+        if flag == "on":
+            config["cloudsave_auto"] = True
+            save_config(config)
+            ok("Auto cloud-sync ON — session will be uploaded to Gist on /exit.")
+        elif flag == "off":
+            config["cloudsave_auto"] = False
+            save_config(config)
+            ok("Auto cloud-sync OFF.")
+        else:
+            status = "ON" if config.get("cloudsave_auto") else "OFF"
+            info(f"Auto cloud-sync is currently {status}. Use 'on' or 'off' to toggle.")
+        return True
+
+    # ── remaining subcommands require a token ─────────────────────────────────
+    if not token:
+        err("No GitHub token configured. Run: /cloudsave setup <token>")
+        info("Get a token at https://github.com/settings/tokens (needs 'gist' scope)")
+        return True
+
+    # ── list ───────────────────────────────────────────────────────────────────
+    if sub == "list":
+        info("Fetching your nano-claude-code sessions from GitHub Gist…")
+        sessions, err_msg = list_sessions(token)
+        if err_msg:
+            err(err_msg)
+            return True
+        if not sessions:
+            info("No sessions found. Upload one with /cloudsave")
+            return True
+        info(f"Found {len(sessions)} session(s):")
+        for s in sessions:
+            ts = s["updated_at"][:16].replace("T", " ")
+            desc = s["description"].replace("[nano-claude-code]", "").strip()
+            print(f"  {clr(s['id'][:8], 'yellow')}…  {clr(ts, 'dim')}  {desc or s['files'][0]}")
+        return True
+
+    # ── load ───────────────────────────────────────────────────────────────────
+    if sub == "load":
+        gist_id = rest.strip()
+        if not gist_id:
+            err("Usage: /cloudsave load <gist_id>")
+            return True
+        info(f"Downloading session {gist_id[:8]}… from Gist…")
+        data, err_msg = download_session(token, gist_id)
+        if err_msg:
+            err(err_msg)
+            return True
+        state.messages = data.get("messages", [])
+        state.turn_count = data.get("turn_count", 0)
+        state.total_input_tokens = data.get("total_input_tokens", 0)
+        state.total_output_tokens = data.get("total_output_tokens", 0)
+        ok(f"Session loaded from Gist ({len(state.messages)} messages).")
+        return True
+
+    # ── push (default when no subcommand or sub == "push") ────────────────────
+    if sub in ("", "push"):
+        description = rest.strip() if sub == "push" else ""
+        if not state.messages:
+            info("Nothing to save — conversation is empty.")
+            return True
+        info("Uploading session to GitHub Gist…")
+        session_data = _build_session_data(state)
+        existing_id = config.get("cloudsave_last_gist_id")
+        gist_id, err_msg = upload_session(session_data, token, description, existing_id)
+        if err_msg:
+            err(f"Upload failed: {err_msg}")
+            return True
+        config["cloudsave_last_gist_id"] = gist_id
+        save_config(config)
+        ok(f"Session uploaded → https://gist.github.com/{gist_id}")
+        return True
+
+    err(f"Unknown subcommand '{sub}'. Run /help for usage.")
+    return True
+
+
 def cmd_exit(_args: str, _state, _config) -> bool:
     ok("Goodbye!")
     save_latest("", _state, _config)  # auto-save to mr_sessions for easy resuming
+    # Auto cloud-sync if enabled
+    if _config.get("cloudsave_auto") and _config.get("gist_token") and _state.messages:
+        info("Auto cloud-sync: uploading session to Gist…")
+        from cloudsave import upload_session
+        from config import save_config
+        session_data = _build_session_data(_state)
+        gist_id, err_msg = upload_session(
+            session_data, _config["gist_token"],
+            existing_gist_id=_config.get("cloudsave_last_gist_id"),
+        )
+        if err_msg:
+            err(f"Cloud sync failed: {err_msg}")
+        else:
+            _config["cloudsave_last_gist_id"] = gist_id
+            save_config(_config)
+            ok(f"Session synced → https://gist.github.com/{gist_id}")
     sys.exit(0)
 
 def cmd_memory(args: str, _state, _config) -> bool:
@@ -1148,6 +1303,7 @@ COMMANDS = {
     "tasks":       cmd_tasks,
     "task":        cmd_tasks,
     "proactive":   cmd_proactive,
+    "cloudsave":   cmd_cloudsave,
     "voice":       cmd_voice,
     "exit":        cmd_exit,
     "quit":        cmd_exit,
