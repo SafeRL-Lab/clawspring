@@ -82,7 +82,7 @@ except ImportError:
     _RICH = False
     console = None
 
-VERSION = "1.0.0"
+VERSION = "3.05.2"
 
 # ── ANSI helpers (used even with rich for non-markdown output) ─────────────
 C = {
@@ -1224,7 +1224,8 @@ def repl(config: dict, initial_prompt: str = None):
         model_clr = clr(model, "cyan", "bold")
         prov_clr  = clr(f"({pname})", "dim")
         pmode     = clr(config.get("permission_mode", "auto"), "yellow")
-        print(clr("╭─ Nano Claude Code ──────────────────────────────╮", "dim"))
+        ver_clr   = clr(f"v{VERSION}", "green")
+        print(clr("╭─ Nano Claude Code ", "dim") + ver_clr + clr(" ─────────────────────────╮", "dim"))
         print(clr("│  Model: ", "dim") + model_clr + " " + prov_clr)
         print(clr("│  Permissions: ", "dim") + pmode)
         print(clr("│  /model to switch provider · /help for commands │", "dim"))
