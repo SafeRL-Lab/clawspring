@@ -150,7 +150,7 @@ def get_claude_md() -> str:
     return "\n# Memory / CLAUDE.md\n" + "\n\n".join(content_parts) + "\n"
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(config: dict | None = None) -> str:
     import platform
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
         date=datetime.now().strftime("%Y-%m-%d %A"),
@@ -162,4 +162,19 @@ def build_system_prompt() -> str:
     memory_ctx = get_memory_context()
     if memory_ctx:
         prompt += f"\n\n# Memory\nYour persistent memories:\n{memory_ctx}\n"
+
+    # Plan mode instructions
+    if config and config.get("permission_mode") == "plan":
+        plan_file = config.get("_plan_file", "")
+        prompt += (
+            "\n\n# Plan Mode (ACTIVE)\n"
+            "You are in PLAN MODE. Important rules:\n"
+            "- You may ONLY read/analyze code using Read, Glob, Grep, WebFetch, WebSearch\n"
+            f"- You may ONLY write to the plan file: {plan_file}\n"
+            "- Do NOT attempt to Write/Edit any other files — those operations will be blocked\n"
+            "- Use TaskCreate to break down your plan into trackable steps if appropriate\n"
+            "- Write a detailed, actionable implementation plan to the plan file\n"
+            "- When the plan is ready, tell the user to run /plan done to begin implementation\n"
+        )
+
     return prompt

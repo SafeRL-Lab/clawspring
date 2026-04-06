@@ -1929,6 +1929,82 @@ def cmd_checkpoint(args: str, state, config) -> bool:
 # /rewind is an alias for /checkpoint
 cmd_rewind = cmd_checkpoint
 
+
+def cmd_plan(args: str, state, config) -> bool:
+    """Enter/exit plan mode or show current plan.
+
+    /plan <description>  — enter plan mode and start planning
+    /plan                — show current plan file contents
+    /plan done           — exit plan mode, restore permissions
+    /plan status         — show plan mode status
+    """
+    arg = args.strip()
+
+    plan_file = config.get("_plan_file", "")
+    in_plan_mode = config.get("permission_mode") == "plan"
+
+    # /plan done — exit plan mode
+    if arg == "done":
+        if not in_plan_mode:
+            err("Not in plan mode.")
+            return True
+        prev = config.pop("_prev_permission_mode", "auto")
+        config["permission_mode"] = prev
+        info(f"Exited plan mode. Permission mode restored to: {prev}")
+        if plan_file:
+            info(f"Plan saved at: {plan_file}")
+            info("You can now ask Claude to implement the plan.")
+        return True
+
+    # /plan status
+    if arg == "status":
+        if in_plan_mode:
+            info(f"Plan mode: ACTIVE")
+            info(f"Plan file: {plan_file}")
+            info(f"Only the plan file is writable. Use /plan done to exit.")
+        else:
+            info("Plan mode: inactive")
+        return True
+
+    # /plan (no args) — show plan contents
+    if not arg:
+        if not plan_file:
+            info("Not in plan mode. Use /plan <description> to start planning.")
+            return True
+        p = Path(plan_file)
+        if p.exists() and p.stat().st_size > 0:
+            info(f"Plan file: {plan_file}")
+            print(p.read_text(encoding="utf-8"))
+        else:
+            info(f"Plan file is empty: {plan_file}")
+        return True
+
+    # /plan <description> — enter plan mode
+    if in_plan_mode:
+        err("Already in plan mode. Use /plan done to exit first.")
+        return True
+
+    # Create plan file
+    session_id = config.get("_session_id", "default")
+    plans_dir = Path.cwd() / ".nano_claude" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    plan_path = plans_dir / f"{session_id}.md"
+    plan_path.write_text(f"# Plan: {arg}\n\n", encoding="utf-8")
+
+    # Switch to plan mode
+    config["_prev_permission_mode"] = config.get("permission_mode", "auto")
+    config["permission_mode"] = "plan"
+    config["_plan_file"] = str(plan_path)
+
+    info("Plan mode activated (read-only except plan file).")
+    info(f"Plan file: {plan_path}")
+    info("Use /plan done to exit and start implementation.")
+    print()
+
+    # Return sentinel to trigger run_query with the description
+    return ("__plan__", arg)
+
+
 COMMANDS = {
     "help":        cmd_help,
     "clear":       cmd_clear,
@@ -1957,6 +2033,7 @@ COMMANDS = {
     "brainstorm":  cmd_brainstorm,
     "checkpoint":  cmd_checkpoint,
     "rewind":      cmd_rewind,
+    "plan":        cmd_plan,
     "exit":        cmd_exit,
     "quit":        cmd_exit,
     "resume":      cmd_resume
@@ -1976,7 +2053,7 @@ def handle_slash(line: str, state, config) -> Union[bool, tuple]:
     if handler:
         result = handler(args, state, config)
         # cmd_voice/cmd_image/cmd_brainstorm return sentinels to ask the REPL to run_query
-        if isinstance(result, tuple) and result[0] in ("__voice__", "__image__", "__brainstorm__"):
+        if isinstance(result, tuple) and result[0] in ("__voice__", "__image__", "__brainstorm__", "__plan__"):
             return result
         return True
 
@@ -2026,6 +2103,7 @@ _CMD_META: dict[str, tuple[str, list[str]]] = {
     "image":       ("Send clipboard image to model",      []),
     "checkpoint":  ("List / restore checkpoints",          ["clear"]),
     "rewind":      ("Rewind to checkpoint (alias)",        ["clear"]),
+    "plan":        ("Enter/exit plan mode",                ["done", "status"]),
     "exit":        ("Exit nano-claude-code",              []),
     "quit":        ("Exit (alias for /exit)",             []),
     "resume":      ("Resume last session",                []),
@@ -2173,7 +2251,7 @@ def repl(config: dict, initial_prompt: str = None):
             verbose = config.get("verbose", False)
     
             # Rebuild system prompt each turn (picks up cwd changes, etc.)
-            system_prompt = build_system_prompt()
+            system_prompt = build_system_prompt(config)
             
             if is_background:
                 print(clr("\n\n[Background Event Triggered]", "yellow"))
@@ -2479,6 +2557,19 @@ def repl(config: dict, initial_prompt: str = None):
                 try:
                     run_query(brain_prompt)
                     _save_synthesis(state, brain_out_file)
+                except KeyboardInterrupt:
+                    print(clr("\n  (interrupted)", "yellow"))
+                continue
+            # Plan sentinel: ("__plan__", description)
+            if result[0] == "__plan__":
+                _, plan_desc = result
+                plan_prompt = (
+                    f"I need you to create an implementation plan for: {plan_desc}\n\n"
+                    f"You are in PLAN MODE. Analyze the codebase using Read/Glob/Grep, "
+                    f"then write a detailed plan to the plan file: {config.get('_plan_file', '')}"
+                )
+                try:
+                    run_query(plan_prompt)
                 except KeyboardInterrupt:
                     print(clr("\n  (interrupted)", "yellow"))
                 continue
