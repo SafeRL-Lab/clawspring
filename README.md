@@ -31,7 +31,7 @@ English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READM
  <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/brainstorm_demo.gif" width="850"/> 
  </div>
 <div align=center>
-<center style="color:#000000;text-decoration:underline">Multi-Agent Brainstorm</center>
+<center style="color:#000000;text-decoration:underline">Brainstorm Mode: Multi-Agent Brainstorm</center>
  </div>
 
 
