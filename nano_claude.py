@@ -1886,6 +1886,12 @@ def _tg_send(token: str, chat_id: int, text: str):
     for chunk in chunks:
         _tg_api(token, "sendMessage", {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"})
 
+def _tg_typing_loop(token: str, chat_id: int, stop_event: threading.Event):
+    """Send 'typing...' indicator every 4 seconds until stop_event is set."""
+    while not stop_event.is_set():
+        _tg_api(token, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        stop_event.wait(4)
+
 def _tg_poll_loop(token: str, chat_id: int, config: dict):
     """Long-polling loop that reads Telegram messages and feeds them to run_query."""
     run_query_cb = config.get("_run_query_callback")
@@ -1939,12 +1945,17 @@ def _tg_poll_loop(token: str, chat_id: int, config: dict):
                     slash_cb = config.get("_handle_slash_callback")
                     if slash_cb:
                         print(clr(f"\n  📩 Telegram: {text}", "cyan"))
+                        _typing_stop = threading.Event()
+                        _typing_t = threading.Thread(target=_tg_typing_loop, args=(token, chat_id, _typing_stop), daemon=True)
+                        _typing_t.start()
                         try:
                             config["_telegram_incoming"] = True
                             slash_cb(text)
                         except Exception as e:
+                            _typing_stop.set()
                             _tg_send(token, chat_id, f"⚠ Error: {e}")
                             continue
+                        _typing_stop.set()
                         # Grab response
                         tg_state = config.get("_state")
                         if tg_state and tg_state.messages:
@@ -1968,13 +1979,18 @@ def _tg_poll_loop(token: str, chat_id: int, config: dict):
                 print(clr(f"\n  📩 Telegram: {text}", "cyan"))
 
                 # Run through nano's model
+                _typing_stop = threading.Event()
+                _typing_t = threading.Thread(target=_tg_typing_loop, args=(token, chat_id, _typing_stop), daemon=True)
+                _typing_t.start()
                 if run_query_cb:
                     try:
                         config["_telegram_incoming"] = True
                         run_query_cb(text)
                     except Exception as e:
+                        _typing_stop.set()
                         _tg_send(token, chat_id, f"⚠ Error: {e}")
                         continue
+                _typing_stop.set()
 
                 # Grab the last assistant response from state
                 state = config.get("_state")
