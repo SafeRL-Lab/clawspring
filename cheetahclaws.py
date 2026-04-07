@@ -3556,7 +3556,7 @@ def repl(config: dict, initial_prompt: str = None):
             
             # If this was a background task, we redraw the prompt for the user
             if is_background:
-                print(clr("\n[claude-code-local] » ", "yellow"), end="", flush=True)
+                print(clr(f"\n[{Path.cwd().name}] » ", "yellow"), end="", flush=True)
                 
                 # If Telegram is connected and this background task didn't originate from a live Telegram query, 
                 # forward the alert to the Telegram user so they are notified!

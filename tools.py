@@ -435,18 +435,45 @@ def _edit(file_path: str, old_string: str, new_string: str, replace_all: bool = 
         return f"Error: {e}"
 
 
+def _kill_proc_tree(pid: int):
+    """Kill a process and all its children."""
+    import sys as _sys
+    if _sys.platform == "win32":
+        # taskkill /T kills the entire process tree on Windows
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                       capture_output=True)
+    else:
+        import signal
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
 def _bash(command: str, timeout: int = 30) -> str:
+    import sys as _sys
+    kwargs = dict(
+        shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, cwd=os.getcwd(),
+    )
+    # On Unix, create a process group so we can kill the whole tree
+    if _sys.platform != "win32":
+        kwargs["preexec_fn"] = os.setsid
     try:
-        r = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=timeout, cwd=os.getcwd(),
-        )
-        out = r.stdout
-        if r.stderr:
-            out += ("\n" if out else "") + "[stderr]\n" + r.stderr
+        proc = subprocess.Popen(command, **kwargs)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_proc_tree(proc.pid)
+            proc.wait()
+            return f"Error: timed out after {timeout}s (process killed)"
+        out = stdout
+        if stderr:
+            out += ("\n" if out else "") + "[stderr]\n" + stderr
         return out.strip() or "(no output)"
-    except subprocess.TimeoutExpired:
-        return f"Error: timed out after {timeout}s"
     except Exception as e:
         return f"Error: {e}"
 
