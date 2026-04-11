@@ -46,7 +46,8 @@ PROVIDERS: dict[str, dict] = {
         "max_completion_tokens": 16384,  # safe cap across gpt-4o/gpt-4.1 family
         "models": [
             "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4.1", "gpt-4.1-mini",
-            "o3-mini", "o1", "o1-mini",
+            "gpt-5", "gpt-5-nano", "gpt-5-mini",
+            "o4-mini", "o3", "o3-mini", "o1", "o1-mini",
         ],
     },
     "gemini": {
@@ -466,9 +467,19 @@ def stream_openai_compat(
         if not config.get("disable_tool_choice"):
             kwargs["tool_choice"] = "auto"
     if config.get("max_tokens"):
-        prov_cap = PROVIDERS.get(detect_provider(model), {}).get("max_completion_tokens")
+        _prov = detect_provider(model)
+        prov_cap = PROVIDERS.get(_prov, {}).get("max_completion_tokens")
         mt = config["max_tokens"]
-        kwargs["max_tokens"] = min(mt, prov_cap) if prov_cap else mt
+        val = min(mt, prov_cap) if prov_cap else mt
+        # Newer OpenAI models (o1/o3/o4/gpt-5 family) dropped max_tokens in favour of
+        # max_completion_tokens.  Use max_completion_tokens for the openai provider so
+        # all current and future OpenAI models work without per-model special-casing.
+        # All other OpenAI-compatible providers (Ollama, vLLM, Gemini, etc.) still
+        # accept max_tokens, so we keep the old key for them.
+        if _prov == "openai":
+            kwargs["max_completion_tokens"] = val
+        else:
+            kwargs["max_tokens"] = val
 
     text          = ""
     tool_buf: dict = {}   # index → {id, name, args_str}
