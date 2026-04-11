@@ -68,6 +68,15 @@ English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READM
 
 ---
 
+  <div align=center>
+ <img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/wechat_demo.gif" width="850"/> 
+ </div>
+<div align=center>
+<center style="color:#000000;text-decoration:underline">WeChat Bridge: Control cheetahclaws from WeChat (微信)</center>
+ </div>
+
+---
+
 
  
 ## 🔥🔥🔥 News (Pacific Time)
@@ -1994,6 +2003,13 @@ If both `telegram_token` and `telegram_chat_id` are set in `~/.cheetahclaws/conf
 ---
 
 ## WeChat Bridge
+
+<div align=center>
+<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/wechat_demo.gif" width="850"/>
+</div>
+<div align=center>
+<center style="color:#000000;text-decoration:underline">WeChat Bridge: Control cheetahclaws from WeChat (微信)</center>
+</div>
 
 `/wechat` connects cheetahclaws to WeChat via **Tencent's iLink Bot API** — the same underlying protocol used by the official [WeixinClawBot](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin) plugin. Authenticate by scanning a QR code with your WeChat app; no manual token setup required.
 
