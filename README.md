@@ -91,6 +91,15 @@ English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READM
 ## 🔥🔥🔥 News (Pacific Time)
 
  
+- Apr 12, 2026 (**v3.05.61**): **Phone vibe-coding: interactive PTY session robustness improvements**
+  - **`!exit` with accidental space** (`bridges/telegram.py`, `slack.py`, `wechat.py`) — exit detection now normalises whitespace so `! exit`, `! quit`, `! stop` (with a space after `!`) all correctly terminate the PTY session.
+  - **`/exit` and `/quit` intercepted** — these were previously forwarded verbatim into the running process (e.g. Claude Code), causing confusion. They are now caught by the bridge before routing and cleanly end the session.
+  - **Input acknowledgement** — every keystroke forwarded to a PTY session immediately echoes back `⌨ <text>` so the user knows their input was received, even before the process produces output.
+  - **`!ping` / `!screen` / `!refresh`** — new meta-commands (also tolerating a space: `! ping`) that force the current pyte screen state to be re-rendered and sent regardless of the deduplication cache.
+  - **Dedup reset on input** (`interactive_session.py`) — `send_input()` now clears `_last_sent` after writing to the PTY, guaranteeing the next output flush is always delivered even if screen content appears unchanged.
+  - **`force_flush()` method** (`interactive_session.py`) — public method that resets the dedup cache and immediately re-renders and sends the visible screen; used by `!ping`.
+  - **Version bumped to 3.05.61.**
+
 - Apr 12, 2026 (**v3.05.60**): **Production reliability, maintainability, and product completeness improvements**
   - **Structured logging** (`logging_utils.py`) — newline-delimited JSON log output with `error/warn/info/debug` level filtering, thread-safe file or stderr sink, and `configure_from_config()` for zero-boilerplate setup. All API calls, retries, tool events, and bridge lifecycle events now emit structured log events with `session_id` correlation.
   - **Circuit breaker** (`circuit_breaker.py`) — per-provider three-state machine (`CLOSED → OPEN → HALF_OPEN`) with rolling failure window (default: 5 failures in 60 s) and exponential cooldown (default: 120 s). `providers.py` wraps every streaming call; `agent.py` catches `CircuitOpenError` and returns a user-visible message without retrying.

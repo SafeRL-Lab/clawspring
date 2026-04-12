@@ -163,7 +163,7 @@ from tools import (
 # ── Live session context (replaces config["_run_query_callback"] etc.) ─────
 import runtime
 
-VERSION = "3.05.60"
+VERSION = "3.05.61"
 
 # ── Load feature modules from modular/ ecosystem ───────────────────────────
 # Commands from modular/ are merged into COMMANDS after the dict is built.
@@ -682,6 +682,13 @@ def repl(config: dict, initial_prompt: str = None):
                         if not _post_tool:
                             _pre_tool_text.append(event.text)
                         stream_text(event.text)
+                        # Fire bridge streaming hook
+                        _hook = runtime.get_session_ctx(config.get("_session_id","default")).on_text_chunk
+                        if _hook:
+                            try:
+                                _hook(event.text)
+                            except Exception:
+                                pass
 
                     elif isinstance(event, ThinkingChunk):
                         if verbose:
@@ -694,6 +701,12 @@ def repl(config: dict, initial_prompt: str = None):
                     elif isinstance(event, ToolStart):
                         flush_response()
                         print_tool_start(event.name, event.inputs, verbose)
+                        _hook = runtime.get_session_ctx(config.get("_session_id","default")).on_tool_start
+                        if _hook:
+                            try:
+                                _hook(event.name, event.inputs or {})
+                            except Exception:
+                                pass
 
                     elif isinstance(event, PermissionRequest):
                         _stop_tool_spinner()
@@ -703,6 +716,12 @@ def repl(config: dict, initial_prompt: str = None):
 
                     elif isinstance(event, ToolEnd):
                         print_tool_end(event.name, event.result, verbose)
+                        _hook = runtime.get_session_ctx(config.get("_session_id","default")).on_tool_end
+                        if _hook:
+                            try:
+                                _hook(event.name, str(event.result or "")[:500])
+                            except Exception:
+                                pass
                         _post_tool = True
                         _post_tool_buf.clear()
                         _duplicate_suppressed = False

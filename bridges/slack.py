@@ -144,6 +144,62 @@ def _slack_poll_loop(token: str, channel: str, config: dict) -> str:
                     evt.set()
                     continue
 
+                # ── Interactive PTY session ────────────────────────────────
+                from bridges.interactive_session import get_session, set_session, remove_session, InteractiveSession
+                _sess_key = f"slack_{channel}"
+                _active_sess = get_session(_sess_key)
+
+                if _active_sess:
+                    stripped = text.strip().lower()
+                    _norm = stripped.replace(" ", "")
+                    _exit_set = {"!exit", "!quit", "!stop", "/exit", "/quit"}
+                    if stripped in _exit_set or _norm in _exit_set or stripped == "/exit_session":
+                        remove_session(_sess_key)
+                        _slack_send(token, channel, "⏹ Interactive session ended.")
+                        continue
+                    if stripped in ("!ping", "!screen", "!refresh") or _norm in ("!ping", "!screen", "!refresh"):
+                        _slack_send(token, channel, "🔄 Refreshing screen…")
+                        _active_sess.force_flush()
+                        continue
+                    _active_sess.send_input(text)
+                    _slack_send(token, channel, f"⌨ `{text[:60]}`")
+                    continue
+
+                if text.strip().startswith("!"):
+                    raw_cmd = text.strip()[1:].strip()
+                    if not raw_cmd or raw_cmd.lower() == "stop":
+                        from bridges.terminal_runner import stop_terminal
+                        killed = stop_terminal(_sess_key)
+                        _slack_send(token, channel, "🛑 Stopped." if killed else "ℹ Nothing running.")
+                        continue
+                    _interactive_progs = ("claude", "python", "python3", "ipython",
+                                          "bash", "sh", "zsh", "node", "irb",
+                                          "sqlite3", "psql", "mysql", "redis-cli")
+                    _base = raw_cmd.split()[0].split("/")[-1]
+                    if _base in _interactive_progs:
+                        def _start_pty_slack(cmd, ch, skey):
+                            def _send(out): _slack_send(token, ch, out)
+                            try:
+                                sess = InteractiveSession(cmd, _send, session_key=skey)
+                                set_session(skey, sess)
+                                _slack_send(token, ch,
+                                            f"▶ `{cmd}` started. Type normally to interact. Send `!exit` to end.")
+                            except Exception as e:
+                                _slack_send(token, ch, f"⚠ Could not start session: {e}")
+                        threading.Thread(target=_start_pty_slack,
+                                         args=(raw_cmd, channel, _sess_key),
+                                         daemon=True).start()
+                        continue
+                    def _slack_terminal(cmd, ch, skey):
+                        from bridges.terminal_runner import run_terminal
+                        _slack_send(token, ch, f"▶ `{cmd}`")
+                        run_terminal(cmd, lambda out: _slack_send(token, ch, out),
+                                     session_key=skey, stop_event=_slack_stop)
+                    threading.Thread(target=_slack_terminal,
+                                     args=(raw_cmd, channel, _sess_key),
+                                     daemon=True).start()
+                    continue
+
                 if text.strip().lower() in ("/stop", "/off"):
                     _slack_send(token, channel, "🔴 cheetahclaws bridge stopped.")
                     _slack_stop.set()
@@ -191,11 +247,65 @@ def _slack_poll_loop(token: str, channel: str, config: dict) -> str:
                         ).start()
                     continue
 
+                # ── !command: run shell command and stream output ──────────
+                if text.strip().startswith("!"):
+                    raw_cmd = text.strip()[1:].strip()
+                    sess_key = f"slack_{channel}"
+
+                    if raw_cmd.lower() in ("stop", ""):
+                        from bridges.terminal_runner import stop_terminal
+                        killed = stop_terminal(sess_key)
+                        _slack_send(token, channel, "🛑 Command stopped." if killed else "ℹ No command running.")
+                        continue
+
+                    def _slack_terminal(cmd, ch, skey):
+                        from bridges.terminal_runner import run_terminal
+                        _slack_send(token, ch, f"▶ `{cmd}`")
+                        run_terminal(cmd, lambda out: _slack_send(token, ch, out),
+                                     session_key=skey, stop_event=_slack_stop)
+
+                    threading.Thread(target=_slack_terminal,
+                                     args=(raw_cmd, channel, sess_key),
+                                     daemon=True).start()
+                    continue
+
+                # ── Claude query: stream response live into placeholder ────
                 def _slack_bg_runner(q_text, ch):
+                    import time as _time
+
                     think_resp = _slack_post(token, "chat.postMessage", {
                         "channel": ch, "text": "⏳ Thinking…"
                     })
                     think_ts = (think_resp or {}).get("ts") if think_resp and think_resp.get("ok") else None
+
+                    _chunks: list[str] = []
+                    _last_edit = [0.0]
+                    _stream_lock = threading.Lock()
+
+                    def _update_placeholder():
+                        text_so_far = "".join(_chunks)
+                        if not text_so_far or not think_ts:
+                            return
+                        _slack_post(token, "chat.update", {
+                            "channel": ch, "ts": think_ts,
+                            "text": text_so_far[-3000:],
+                        })
+                        _last_edit[0] = _time.monotonic()
+
+                    def _on_chunk(chunk: str):
+                        _chunks.append(chunk)
+                        with _stream_lock:
+                            if _time.monotonic() - _last_edit[0] >= 1.2:
+                                _update_placeholder()
+
+                    def _on_tool_start(name: str, inputs: dict):
+                        cmd_preview = str(inputs.get("command", inputs.get("file_path", ""))).strip()[:60]
+                        label = f"🔧 *{name}*" + (f": `{cmd_preview}`" if cmd_preview else "")
+                        _slack_send(token, ch, label)
+
+                    session_ctx.on_text_chunk = _on_chunk
+                    session_ctx.on_tool_start = _on_tool_start
+                    session_ctx.on_tool_end   = None
 
                     config["_slack_current_channel"] = ch
                     config["_in_slack_turn"] = True
@@ -206,35 +316,35 @@ def _slack_poll_loop(token: str, channel: str, config: dict) -> str:
                         _slack_send(token, ch, f"⚠ Error: {e}")
                         return
                     finally:
+                        session_ctx.on_text_chunk = None
+                        session_ctx.on_tool_start = None
                         config.pop("_in_slack_turn", None)
                         config.pop("_slack_current_channel", None)
 
-                    reply = ""
-                    state = session_ctx.agent_state
-                    if state and state.messages:
-                        for m in reversed(state.messages):
-                            if m.get("role") == "assistant":
-                                content = m.get("content", "")
-                                if isinstance(content, list):
-                                    parts = [
-                                        b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
-                                        else (b if isinstance(b, str) else "")
-                                        for b in content
-                                    ]
-                                    content = "\n".join(p for p in parts if p)
-                                reply = content
-                                break
-
-                    if reply:
-                        if think_ts:
-                            upd = _slack_post(token, "chat.update", {
-                                "channel": ch, "ts": think_ts, "text": reply
-                            })
-                            if not (upd and upd.get("ok")):
-                                _slack_send(token, ch, reply)
-                        else:
-                            _slack_send(token, ch, reply)
-                        print(clr(f"  ✈  Slack response sent → {reply[:60]}…", "cyan"))
+                    _update_placeholder()
+                    # If nothing streamed, fall back to reading state
+                    if not _chunks:
+                        state = session_ctx.agent_state
+                        if state and state.messages:
+                            for m in reversed(state.messages):
+                                if m.get("role") == "assistant":
+                                    content = m.get("content", "")
+                                    if isinstance(content, list):
+                                        content = "\n".join(
+                                            b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
+                                            else (b if isinstance(b, str) else "")
+                                            for b in content
+                                        )
+                                    if content:
+                                        if think_ts:
+                                            _slack_post(token, "chat.update", {
+                                                "channel": ch, "ts": think_ts, "text": content
+                                            })
+                                        else:
+                                            _slack_send(token, ch, content)
+                                    break
+                    elif _chunks:
+                        print(clr(f"  ✈  Slack streamed → {"".join(_chunks)[:60]}…", "cyan"))
 
                 threading.Thread(target=_slack_bg_runner, args=(text, channel), daemon=True).start()
 

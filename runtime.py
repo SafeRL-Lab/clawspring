@@ -57,6 +57,14 @@ class RuntimeContext:
     wx_input_event:    Optional[threading.Event] = None
     wx_input_value:    str = ""
 
+    # ── Live-streaming hooks (set by bridges before run_query; cleared after) ──
+    # on_text_chunk(text)          — called for every TextChunk as it streams
+    # on_tool_start(name, inputs)  — called when a tool call begins
+    # on_tool_end(name, result)    — called when a tool call finishes
+    on_text_chunk:  Optional[Callable[[str], None]] = None
+    on_tool_start:  Optional[Callable[[str, dict], None]] = None
+    on_tool_end:    Optional[Callable[[str, str], None]] = None
+
 
 # ── Per-session registry ───────────────────────────────────────────────────
 

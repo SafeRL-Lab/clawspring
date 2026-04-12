@@ -340,6 +340,63 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
 
                 print(clr(f"\n  📩 WeChat [{from_uid[:8]}]: {text}", "cyan"))
 
+                # ── Interactive PTY session ────────────────────────────────
+                from bridges.interactive_session import get_session, set_session, remove_session, InteractiveSession
+                _sess_key = f"wx_{from_uid}"
+                _active_sess = get_session(_sess_key)
+
+                if _active_sess:
+                    stripped = text.strip().lower()
+                    _norm = stripped.replace(" ", "")
+                    _exit_set = {"!exit", "!quit", "!stop", "/exit", "/quit"}
+                    if stripped in _exit_set or _norm in _exit_set or stripped == "/exit_session":
+                        remove_session(_sess_key)
+                        _wx_send(from_uid, "⏹ Interactive session ended.", config)
+                        continue
+                    if stripped in ("!ping", "!screen", "!refresh") or _norm in ("!ping", "!screen", "!refresh"):
+                        _wx_send(from_uid, "🔄 Refreshing screen…", config)
+                        _active_sess.force_flush()
+                        continue
+                    _active_sess.send_input(text)
+                    _wx_send(from_uid, f"⌨ `{text[:60]}`", config)
+                    continue
+
+                if text.strip().startswith("!"):
+                    raw_cmd = text.strip()[1:].strip()
+                    if not raw_cmd or raw_cmd.lower() == "stop":
+                        from bridges.terminal_runner import stop_terminal
+                        killed = stop_terminal(_sess_key)
+                        _wx_send(from_uid, "🛑 Stopped." if killed else "ℹ Nothing running.", config)
+                        continue
+                    _interactive_progs = ("claude", "python", "python3", "ipython",
+                                          "bash", "sh", "zsh", "node", "irb",
+                                          "sqlite3", "psql", "mysql", "redis-cli")
+                    _base = raw_cmd.split()[0].split("/")[-1]
+                    if _base in _interactive_progs:
+                        def _start_pty_wx(cmd, uid, skey):
+                            def _send(out): _wx_send(uid, out, config)
+                            try:
+                                sess = InteractiveSession(cmd, _send, session_key=skey)
+                                set_session(skey, sess)
+                                _wx_send(uid,
+                                         f"▶ {cmd} 已启动\n发消息即可交互，发 !exit 结束会话",
+                                         config)
+                            except Exception as e:
+                                _wx_send(uid, f"⚠ 无法启动: {e}", config)
+                        threading.Thread(target=_start_pty_wx,
+                                         args=(raw_cmd, from_uid, _sess_key),
+                                         daemon=True).start()
+                        continue
+                    def _wx_terminal(cmd, uid, skey):
+                        from bridges.terminal_runner import run_terminal
+                        _wx_send(uid, f"▶ {cmd}", config)
+                        run_terminal(cmd, lambda out: _wx_send(uid, out, config),
+                                     session_key=skey, stop_event=_wechat_stop)
+                    threading.Thread(target=_wx_terminal,
+                                     args=(raw_cmd, from_uid, _sess_key),
+                                     daemon=True).start()
+                    continue
+
                 if text.strip().lower() in ("/stop", "/off"):
                     _wx_send(from_uid, "🔴 cheetahclaws bridge stopped.", config)
                     _wechat_stop.set()
@@ -387,12 +444,68 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                         ).start()
                     continue
 
+                # ── !command: run shell command and stream output ──────────
+                if text.strip().startswith("!"):
+                    raw_cmd = text.strip()[1:].strip()
+                    sess_key = f"wx_{from_uid}"
+
+                    if raw_cmd.lower() in ("stop", ""):
+                        from bridges.terminal_runner import stop_terminal
+                        killed = stop_terminal(sess_key)
+                        _wx_send(from_uid, "🛑 Command stopped." if killed else "ℹ No command running.", config)
+                        continue
+
+                    def _wx_terminal(cmd, uid, skey):
+                        from bridges.terminal_runner import run_terminal
+                        _wx_send(uid, f"▶ {cmd}", config)
+                        run_terminal(cmd, lambda out: _wx_send(uid, out, config),
+                                     session_key=skey, stop_event=_wechat_stop)
+
+                    threading.Thread(target=_wx_terminal,
+                                     args=(raw_cmd, from_uid, sess_key),
+                                     daemon=True).start()
+                    continue
+
+                # ── Claude query: stream in timed paragraphs ───────────────
+                # WeChat does not support message editing, so we buffer chunks
+                # and send a new message every ~3 seconds as text arrives.
                 def _wx_bg_runner(q_text, uid):
+                    import time as _time
+
                     _typing_stop = threading.Event()
                     _typing_t = threading.Thread(
                         target=_wx_typing_loop, args=(uid, _typing_stop, config), daemon=True
                     )
                     _typing_t.start()
+
+                    _chunks: list[str] = []
+                    _last_send = [_time.monotonic()]
+                    _stream_lock = threading.Lock()
+                    _WX_STREAM_INTERVAL = 3.0   # send partial response every 3 s
+                    _WX_STREAM_MIN_LEN  = 80    # don't send tiny fragments
+
+                    def _flush_chunks():
+                        text_so_far = "".join(_chunks)
+                        if len(text_so_far) >= _WX_STREAM_MIN_LEN:
+                            _wx_send(uid, text_so_far[-2000:], config)
+                            _chunks.clear()
+                        _last_send[0] = _time.monotonic()
+
+                    def _on_chunk(chunk: str):
+                        _chunks.append(chunk)
+                        with _stream_lock:
+                            if _time.monotonic() - _last_send[0] >= _WX_STREAM_INTERVAL:
+                                _flush_chunks()
+
+                    def _on_tool_start(name: str, inputs: dict):
+                        cmd_preview = str(inputs.get("command", inputs.get("file_path", ""))).strip()[:60]
+                        label = f"🔧 {name}" + (f": {cmd_preview}" if cmd_preview else "")
+                        _wx_send(uid, label, config)
+
+                    session_ctx.on_text_chunk = _on_chunk
+                    session_ctx.on_tool_start = _on_tool_start
+                    session_ctx.on_tool_end   = None
+
                     config["_wx_current_user_id"] = uid
                     config["_in_wechat_turn"] = True
                     try:
@@ -403,24 +516,32 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                         _wx_send(uid, f"⚠ Error: {e}", config)
                         return
                     finally:
+                        session_ctx.on_text_chunk = None
+                        session_ctx.on_tool_start = None
                         config.pop("_in_wechat_turn", None)
                         config.pop("_wx_current_user_id", None)
+
                     _typing_stop.set()
-                    state = session_ctx.agent_state
-                    if state and state.messages:
-                        for m in reversed(state.messages):
-                            if m.get("role") == "assistant":
-                                content = m.get("content", "")
-                                if isinstance(content, list):
-                                    parts = [
-                                        b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
-                                        else (b if isinstance(b, str) else "")
-                                        for b in content
-                                    ]
-                                    content = "\n".join(p for p in parts if p)
-                                if content:
-                                    _wx_send(uid, content, config)
-                                break
+                    # Send whatever remains in the chunk buffer
+                    remaining = "".join(_chunks).strip()
+                    if remaining:
+                        _wx_send(uid, remaining, config)
+                    elif not _chunks:
+                        # Nothing streamed — fall back to state.messages
+                        state = session_ctx.agent_state
+                        if state and state.messages:
+                            for m in reversed(state.messages):
+                                if m.get("role") == "assistant":
+                                    content = m.get("content", "")
+                                    if isinstance(content, list):
+                                        content = "\n".join(
+                                            b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
+                                            else (b if isinstance(b, str) else "")
+                                            for b in content
+                                        )
+                                    if content:
+                                        _wx_send(uid, content, config)
+                                    break
 
                 threading.Thread(target=_wx_bg_runner, args=(text, from_uid), daemon=True).start()
 

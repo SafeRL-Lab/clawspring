@@ -172,6 +172,71 @@ def _tg_poll_loop(token: str, chat_id: int, config: dict) -> str:
                     evt.set()
                     continue
 
+                # ── Interactive PTY session (e.g. !claude, !python, !bash) ─
+                from bridges.interactive_session import get_session, set_session, remove_session, InteractiveSession
+                _sess_key = f"tg_{chat_id}"
+                _active_sess = get_session(_sess_key)
+
+                if _active_sess:
+                    stripped = text.strip().lower()
+                    # Normalize: "! exit" → "!exit" (handle accidental spaces)
+                    _norm = stripped.replace(" ", "")
+                    # Exit commands (with or without space after !)
+                    _exit_set = {"!exit", "!quit", "!stop", "/exit", "/quit"}
+                    if stripped in _exit_set or _norm in _exit_set or stripped == "/exit_session":
+                        remove_session(_sess_key)
+                        _tg_send(token, chat_id, "⏹ Interactive session ended.")
+                        continue
+                    # Force-refresh screen (useful when output stalled)
+                    if stripped in ("!ping", "!screen", "!refresh") or _norm in ("!ping", "!screen", "!refresh"):
+                        _tg_send(token, chat_id, "🔄 Refreshing screen…")
+                        _active_sess.force_flush()
+                        continue
+                    # Route all input to the running process
+                    _active_sess.send_input(text)
+                    # Small acknowledgement so user knows input was received
+                    _tg_send(token, chat_id, f"⌨ `{text[:60]}`")
+                    continue
+
+                # Start a new interactive session with !cmd
+                if text.strip().startswith("!"):
+                    raw_cmd = text.strip()[1:].strip()
+                    if not raw_cmd or raw_cmd.lower() == "stop":
+                        from bridges.terminal_runner import stop_terminal
+                        killed = stop_terminal(_sess_key)
+                        _tg_send(token, chat_id, "🛑 Stopped." if killed else "ℹ Nothing running.")
+                        continue
+                    # Detect interactive programs → use PTY session
+                    _interactive_progs = ("claude", "python", "python3", "ipython",
+                                          "bash", "sh", "zsh", "node", "irb", "pry",
+                                          "sqlite3", "psql", "mysql", "redis-cli")
+                    _base = raw_cmd.split()[0].split("/")[-1]
+                    if _base in _interactive_progs:
+                        def _start_pty(cmd, chat_token, cid, skey):
+                            def _send(out): _tg_send(chat_token, cid, out)
+                            try:
+                                sess = InteractiveSession(cmd, _send, session_key=skey)
+                                set_session(skey, sess)
+                                _tg_send(chat_token, cid,
+                                         f"▶ `{cmd}` started.\n"
+                                         f"Type normally to interact. Send `!exit` to end.")
+                            except Exception as e:
+                                _tg_send(chat_token, cid, f"⚠ Could not start session: {e}")
+                        threading.Thread(target=_start_pty,
+                                         args=(raw_cmd, token, chat_id, _sess_key),
+                                         daemon=True).start()
+                        continue
+                    # Non-interactive command → run and stream output
+                    def _terminal_runner(cmd, chat_token, cid, skey):
+                        from bridges.terminal_runner import run_terminal
+                        _tg_send(chat_token, cid, f"▶ `{cmd}`")
+                        run_terminal(cmd, lambda out: _tg_send(chat_token, cid, out),
+                                     session_key=skey, stop_event=_telegram_stop)
+                    threading.Thread(target=_terminal_runner,
+                                     args=(raw_cmd, token, chat_id, _sess_key),
+                                     daemon=True).start()
+                    continue
+
                 # Handle Telegram bot commands
                 if text.strip().startswith("/"):
                     tg_cmd = text.strip().lower()
@@ -218,38 +283,102 @@ def _tg_poll_loop(token: str, chat_id: int, config: dict) -> str:
 
                 print(clr(f"\n  📩 Telegram: {text}", "cyan"))
 
+                # ── !command: run shell command and stream output ──────────
+                if text.strip().startswith("!"):
+                    raw_cmd = text.strip()[1:].strip()
+                    sess_key = f"tg_{chat_id}"
+
+                    if raw_cmd.lower() in ("stop", ""):
+                        from bridges.terminal_runner import stop_terminal
+                        killed = stop_terminal(sess_key)
+                        _tg_send(token, chat_id, "🛑 Command stopped." if killed else "ℹ No command running.")
+                        continue
+
+                    def _terminal_runner(cmd, chat_token, cid, skey):
+                        from bridges.terminal_runner import run_terminal
+                        _tg_send(chat_token, cid, f"▶ `{cmd}`")
+                        run_terminal(cmd, lambda out: _tg_send(chat_token, cid, out),
+                                     session_key=skey, stop_event=_telegram_stop)
+
+                    threading.Thread(target=_terminal_runner,
+                                     args=(raw_cmd, token, chat_id, sess_key),
+                                     daemon=True).start()
+                    continue
+
+                # ── Claude query: stream response back live ────────────────
                 def _bg_runner(q_text, chat_token, chat_id):
-                    _typing_stop = threading.Event()
-                    _typing_t = threading.Thread(target=_tg_typing_loop, args=(chat_token, chat_id, _typing_stop), daemon=True)
-                    _typing_t.start()
+                    import time as _time
 
-                    if run_query_cb:
-                        try:
-                            config["_telegram_incoming"] = True
-                            run_query_cb(q_text)
-                        except Exception as e:
-                            _typing_stop.set()
-                            _tg_send(chat_token, chat_id, f"⚠ Error: {e}")
+                    # Post placeholder; we'll edit it as chunks arrive
+                    init_resp = _tg_api(chat_token, "sendMessage", {
+                        "chat_id": chat_id, "text": "⏳",
+                    })
+                    msg_id = (
+                        (init_resp or {}).get("result", {}).get("message_id")
+                        if init_resp and init_resp.get("ok") else None
+                    )
+
+                    # Streaming state
+                    _chunks: list[str] = []
+                    _last_edit = [0.0]
+                    _stream_lock = threading.Lock()
+
+                    def _edit_msg():
+                        text_so_far = "".join(_chunks)
+                        if not text_so_far or not msg_id:
                             return
+                        # Telegram max message length: 4096 chars
+                        _tg_api(chat_token, "editMessageText", {
+                            "chat_id": chat_id,
+                            "message_id": msg_id,
+                            "text": text_so_far[-4000:],
+                        })
+                        _last_edit[0] = _time.monotonic()
 
-                    _typing_stop.set()
+                    def _on_chunk(chunk: str):
+                        _chunks.append(chunk)
+                        with _stream_lock:
+                            if _time.monotonic() - _last_edit[0] >= 1.2:  # Telegram: ≤1 edit/sec
+                                _edit_msg()
 
-                    state = session_ctx.agent_state
-                    if state and state.messages:
-                        for m in reversed(state.messages):
-                            if m.get("role") == "assistant":
-                                content = m.get("content", "")
-                                if isinstance(content, list):
-                                    parts = []
-                                    for block in content:
-                                        if isinstance(block, dict) and block.get("type") == "text":
-                                            parts.append(block["text"])
-                                        elif isinstance(block, str):
-                                            parts.append(block)
-                                    content = "\n".join(parts)
-                                if content:
-                                    _tg_send(chat_token, chat_id, content)
-                                break
+                    def _on_tool_start(name: str, inputs: dict):
+                        cmd_preview = str(inputs.get("command", inputs.get("file_path", ""))).strip()[:60]
+                        label = f"🔧 {name}" + (f": `{cmd_preview}`" if cmd_preview else "")
+                        _tg_send(chat_token, chat_id, label)
+
+                    session_ctx.on_text_chunk  = _on_chunk
+                    session_ctx.on_tool_start  = _on_tool_start
+                    session_ctx.on_tool_end    = None
+
+                    try:
+                        config["_telegram_incoming"] = True
+                        run_query_cb(q_text)
+                    except Exception as e:
+                        _tg_send(chat_token, chat_id, f"⚠ Error: {e}")
+                        return
+                    finally:
+                        session_ctx.on_text_chunk = None
+                        session_ctx.on_tool_start = None
+                        config.pop("_telegram_incoming", None)
+
+                    # Final edit to ensure the complete response is shown
+                    _edit_msg()
+                    # If nothing was streamed (pure tool-use turn), send final assistant msg
+                    if not _chunks:
+                        state = session_ctx.agent_state
+                        if state and state.messages:
+                            for m in reversed(state.messages):
+                                if m.get("role") == "assistant":
+                                    content = m.get("content", "")
+                                    if isinstance(content, list):
+                                        content = "\n".join(
+                                            b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
+                                            else (b if isinstance(b, str) else "")
+                                            for b in content
+                                        )
+                                    if content:
+                                        _tg_send(chat_token, chat_id, content)
+                                    break
 
                 threading.Thread(target=_bg_runner, args=(text, token, chat_id), daemon=True).start()
 
