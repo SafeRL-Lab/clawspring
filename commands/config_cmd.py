@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 from ui.render import clr, info, ok, warn, err
 
@@ -83,7 +84,8 @@ def _interactive_ollama_picker(config: dict) -> bool:
 def cmd_config(args: str, _state, config) -> bool:
     from config import save_config
     if not args:
-        display = {k: v for k, v in config.items() if k != "api_key"}
+        display = {k: v for k, v in config.items() if k != "api_key" and k != "_proactive_thread" and not isinstance(v,
+ type(threading.Thread))}
         print(json.dumps(display, indent=2))
     elif "=" in args:
         key, _, val = args.partition("=")
