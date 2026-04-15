@@ -45,16 +45,9 @@ py-modules = [
     "subagent",
     "tmux_tools",
     "tool_registry",
-    "tools",
-    "tools_diagnostics",
-    "tools_fs",
-    "tools_interaction",
-    "tools_notebook",
-    "tools_security",
-    "tools_shell",
-    "tools_web",
 ]
 packages = [
+    "tools",
     "mcp", "memory", "monitor", "multi_agent", "plugin", "skill", "task",
     "voice", "video", "checkpoint",
     "ui", "bridges", "commands",

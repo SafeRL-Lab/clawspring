@@ -38,9 +38,11 @@ def _run(tmpdir):
     print("STEP 1: EnterPlanMode")
     print(SEP)
     result = _enter_plan_mode({"task_description": "Add WebSocket support"}, config)
+    import runtime
+    sctx = runtime.get_session_ctx("tooltest")
     assert config["permission_mode"] == "plan"
-    assert config["_plan_file"]
-    plan_path = Path(config["_plan_file"])
+    assert sctx.plan_file
+    plan_path = Path(sctx.plan_file)
     assert plan_path.exists()
     assert "WebSocket" in plan_path.read_text(encoding="utf-8")
     assert "Plan mode activated" in result

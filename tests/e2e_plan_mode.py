@@ -67,9 +67,12 @@ def test_plan_mode():
     plan_path = plans_dir / "plantest.md"
     plan_path.write_text("# Plan: Add WebSocket support\n\n", encoding="utf-8")
 
-    config["_prev_permission_mode"] = config["permission_mode"]
+    import runtime
+    sctx = runtime.get_session_ctx("test_plan")
+    config["_session_id"] = "test_plan"
+    sctx.prev_permission_mode = config["permission_mode"]
     config["permission_mode"] = "plan"
-    config["_plan_file"] = str(plan_path)
+    sctx.plan_file = str(plan_path)
 
     print(f"  Plan file: {plan_path}")
     assert config["permission_mode"] == "plan"
@@ -127,7 +130,8 @@ def test_plan_mode():
     print("STEP 8: Exit plan mode — permissions restored")
     print(SEP)
 
-    prev = config.pop("_prev_permission_mode", "auto")
+    prev = sctx.prev_permission_mode or "auto"
+    sctx.prev_permission_mode = None
     config["permission_mode"] = prev
 
     assert config["permission_mode"] == "auto"
@@ -154,7 +158,7 @@ def test_plan_mode():
 
     # Re-enter plan mode for this test
     config["permission_mode"] = "plan"
-    config["_plan_file"] = str(plan_path)
+    sctx.plan_file = str(plan_path)
 
     from context import build_system_prompt
     prompt = build_system_prompt(config)

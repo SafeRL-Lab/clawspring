@@ -426,16 +426,19 @@ def cmd_proactive(args: str, state, config) -> bool:
     """
     args = args.strip().lower()
 
+    import runtime
+    sctx = runtime.get_ctx(config)
+
     if not args:
-        if config.get("_proactive_enabled"):
-            interval = config.get("_proactive_interval", 300)
+        if sctx.proactive_enabled:
+            interval = sctx.proactive_interval
             info(f"Proactive background polling: ON  (triggering every {interval}s of inactivity)")
         else:
             info("Proactive background polling: OFF  (use /proactive 5m to enable)")
         return True
 
     if args == "off":
-        config["_proactive_enabled"] = False
+        sctx.proactive_enabled = False
         info("Proactive background polling: OFF")
         return True
 
@@ -452,14 +455,14 @@ def cmd_proactive(args: str, state, config) -> bool:
 
     try:
         val = int(val_str)
-        config["_proactive_interval"] = val * multiplier
+        sctx.proactive_interval = val * multiplier
     except ValueError:
         err(f"Invalid duration: '{args}'. Use '5m', '30s', '1h', or 'off'.")
         return True
 
-    config["_proactive_enabled"] = True
-    config["_last_interaction_time"] = time.time()
-    info(f"Proactive background polling: ON  (triggering every {config['_proactive_interval']}s of inactivity)")
+    sctx.proactive_enabled = True
+    sctx.last_interaction_time = time.time()
+    info(f"Proactive background polling: ON  (triggering every {sctx.proactive_interval}s of inactivity)")
     return True
 
 
@@ -493,7 +496,8 @@ def cmd_image(args: str, state, config) -> Union[bool, tuple]:
     size_kb = len(buf.getvalue()) / 1024
 
     info(f"📷 Clipboard image captured ({size_kb:.0f} KB, {img.size[0]}x{img.size[1]})")
-    config["_pending_image"] = b64
+    import runtime
+    runtime.get_ctx(config).pending_image = b64
 
     prompt = args.strip() if args.strip() else "What do you see in this image? Describe it in detail."
     return ("__image__", prompt)

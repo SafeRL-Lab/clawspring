@@ -46,6 +46,7 @@ def cmd_voice(args: str, state, config):
     /voice lang <code> — set STT language (e.g. zh, en, ja; 'auto' to reset)
     /voice device     — list and select input microphone
     """
+    import runtime as _rt
     global _voice_language
 
     subcmd = args.strip().lower().split()[0] if args.strip() else ""
@@ -66,7 +67,7 @@ def cmd_voice(args: str, state, config):
         if not devices:
             _err("No input devices found.")
             return True
-        current = config.get("_voice_device_index")
+        current = _rt.get_ctx(config).voice_device_index
         print(_clr("  🎙  Available input devices:", "cyan", "bold"))
         for d in devices:
             marker = " ◀" if current == d["index"] else ""
@@ -76,7 +77,7 @@ def cmd_voice(args: str, state, config):
             idx = int(sel)
             valid = [d["index"] for d in devices]
             if idx in valid:
-                config["_voice_device_index"] = idx
+                _rt.get_ctx(config).voice_device_index = idx
                 name = next(d["name"] for d in devices if d["index"] == idx)
                 _ok(f"Microphone set to: [{idx}] {name}")
             else:
@@ -115,7 +116,7 @@ def cmd_voice(args: str, state, config):
             _ok(f"  STT backend:       {get_stt_backend_name()}")
         else:
             _err(f"  STT: {stt_reason}")
-        dev_idx = config.get("_voice_device_index")
+        dev_idx = _rt.get_ctx(config).voice_device_index
         if dev_idx is not None:
             try:
                 from modular.voice import list_input_devices
@@ -158,7 +159,7 @@ def cmd_voice(args: str, state, config):
         text = _voice_input(
             language=_voice_language,
             on_energy=on_energy,
-            device_index=config.get("_voice_device_index"),
+            device_index=_rt.get_ctx(config).voice_device_index,
         )
     except KeyboardInterrupt:
         print()

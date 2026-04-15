@@ -15,6 +15,7 @@ from compaction import maybe_compact, estimate_tokens, get_context_limit, compac
 import logging_utils as _log
 import quota as _quota
 from circuit_breaker import CircuitOpenError as _CircuitOpenError
+import runtime
 
 # ── Re-export event types (used by cheetahclaws.py) ────────────────────────
 __all__ = [
@@ -77,7 +78,9 @@ def run(
     # Append user turn in neutral format
     user_msg = {"role": "user", "content": user_message}
     # Attach pending image from /image command if present
-    pending_img = config.pop("_pending_image", None)
+    sctx = runtime.get_ctx(config)
+    pending_img = sctx.pending_image
+    sctx.pending_image = None
     if pending_img:
         user_msg["images"] = [pending_img]
     state.messages.append(user_msg)
@@ -207,7 +210,7 @@ def run(
 
             if not permitted:
                 if config.get("permission_mode") == "plan":
-                    plan_file = config.get("_plan_file", "")
+                    plan_file = runtime.get_ctx(config).plan_file or ""
                     result = (
                         f"[Plan mode] Write operations are blocked except to the plan file: {plan_file}\n"
                         "Finish your analysis and write the plan to the plan file. "
@@ -255,7 +258,7 @@ def _check_permission(tc: dict, config: dict) -> bool:
     if perm_mode == "plan":
         # Allow writes ONLY to the plan file
         if name in ("Write", "Edit"):
-            plan_file = config.get("_plan_file", "")
+            plan_file = runtime.get_ctx(config).plan_file or ""
             target = tc["input"].get("file_path", "")
             if plan_file and target and \
                os.path.normpath(target) == os.path.normpath(plan_file):

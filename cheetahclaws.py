@@ -243,15 +243,16 @@ def _proactive_watcher_loop(config):
     """Background daemon that fires a wake-up prompt after a period of inactivity."""
     while True:
         time.sleep(1)
-        if not config.get("_proactive_enabled"):
+        sctx = runtime.get_ctx(config)
+        if not sctx.proactive_enabled:
             continue
         try:
             now = time.time()
-            interval = config.get("_proactive_interval", 300)
-            last = config.get("_last_interaction_time", now)
+            interval = sctx.proactive_interval
+            last = sctx.last_interaction_time
             if now - last >= interval:
-                config["_last_interaction_time"] = now
-                cb = runtime.get_session_ctx(config.get("_session_id", "default")).run_query
+                sctx.last_interaction_time = now
+                cb = sctx.run_query
                 if cb:
                     cb(f"(System Automated Event) You have been inactive for {interval} seconds. "
                        "Before doing anything else, review your previous messages in this conversation. "
@@ -620,7 +621,7 @@ def repl(config: dict, initial_prompt: str = None):
             active_flags.append("verbose")
         if config.get("thinking"):
             active_flags.append("thinking")
-        if config.get("_proactive_enabled"):
+        if session_ctx.proactive_enabled:
             active_flags.append("proactive")
         if config.get("telegram_token") and config.get("telegram_chat_id"):
             active_flags.append("telegram")
@@ -643,13 +644,11 @@ def repl(config: dict, initial_prompt: str = None):
     _rich_live_default = not _in_ssh and not _is_dumb
     set_rich_live(config.get("rich_live", _rich_live_default))
 
-    # Initialize proactive polling state in config (avoids module-level globals)
-    config.setdefault("_proactive_enabled", False)
-    config.setdefault("_proactive_interval", 300)
-    config.setdefault("_last_interaction_time", time.time())
-    if config.get("_proactive_thread") is None:
+    # Initialize proactive polling state via RuntimeContext (defaults already set)
+    session_ctx.last_interaction_time = time.time()
+    if session_ctx.proactive_thread is None:
         t = threading.Thread(target=_proactive_watcher_loop, args=(config,), daemon=True)
-        config["_proactive_thread"] = t
+        session_ctx.proactive_thread = t
         t.start()
 
     def run_query(user_input: str, is_background: bool = False):
@@ -661,9 +660,10 @@ def repl(config: dict, initial_prompt: str = None):
             # Rebuild system prompt each turn (picks up cwd changes, etc.)
             system_prompt = build_system_prompt(config)
 
-            if is_background and not config.get("_telegram_incoming"):
+            if is_background and not session_ctx.telegram_incoming:
                 print(clr("\n\n[Background Event Triggered]", "yellow"))
-            config["_in_telegram_turn"] = config.pop("_telegram_incoming", False)
+            session_ctx.in_telegram_turn = session_ctx.telegram_incoming
+            session_ctx.telegram_incoming = False
 
             print(clr("\n╭─ CheetahClaws ", "dim") + clr("●", "green") + clr(" ─────────────────────────", "dim"))
 
@@ -717,7 +717,7 @@ def repl(config: dict, initial_prompt: str = None):
                             _pre_tool_text.append(event.text)
                         stream_text(event.text)
                         # Fire bridge streaming hook
-                        _hook = runtime.get_session_ctx(config.get("_session_id","default")).on_text_chunk
+                        _hook = session_ctx.on_text_chunk
                         if _hook:
                             try:
                                 _hook(event.text)
@@ -735,7 +735,7 @@ def repl(config: dict, initial_prompt: str = None):
                     elif isinstance(event, ToolStart):
                         flush_response()
                         print_tool_start(event.name, event.inputs, verbose)
-                        _hook = runtime.get_session_ctx(config.get("_session_id","default")).on_tool_start
+                        _hook = session_ctx.on_tool_start
                         if _hook:
                             try:
                                 _hook(event.name, event.inputs or {})
@@ -750,7 +750,7 @@ def repl(config: dict, initial_prompt: str = None):
 
                     elif isinstance(event, ToolEnd):
                         print_tool_end(event.name, event.result, verbose)
-                        _hook = runtime.get_session_ctx(config.get("_session_id","default")).on_tool_end
+                        _hook = session_ctx.on_tool_end
                         if _hook:
                             try:
                                 _hook(event.name, str(event.result or "")[:500])
@@ -808,7 +808,7 @@ def repl(config: dict, initial_prompt: str = None):
 
                 # If Telegram is connected and this background task didn't originate from a live Telegram query,
                 # forward the alert to the Telegram user so they are notified!
-                is_tg_turn = config.get("_in_telegram_turn", False)
+                is_tg_turn = session_ctx.in_telegram_turn
                 ttok = config.get("telegram_token")
                 tchat = config.get("telegram_chat_id")
                 if not is_tg_turn and ttok and tchat:
@@ -839,7 +839,7 @@ def repl(config: dict, initial_prompt: str = None):
         except Exception:
             pass  # never let checkpoint errors break the REPL
 
-        config["_last_interaction_time"] = time.time()
+        session_ctx.last_interaction_time = time.time()
 
     session_ctx.run_query = lambda msg: run_query(msg, is_background=True)
 

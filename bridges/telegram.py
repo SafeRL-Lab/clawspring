@@ -128,7 +128,8 @@ def _tg_poll_loop(token: str, chat_id: int, config: dict) -> str:
                                 img_bytes = resp.read()
                             b64 = base64.b64encode(img_bytes).decode("utf-8")
                             size_kb = len(img_bytes) / 1024
-                            config["_pending_image"] = b64
+                            sctx = runtime.get_ctx(config)
+                            sctx.pending_image = b64
                             text = caption
                             print(clr(f"\n  📩 Telegram: 📷 image ({size_kb:.0f} KB) + \"{caption[:50]}\"", "cyan"))
                         else:
@@ -531,7 +532,8 @@ def _bg_runner(job, q_text: str, chat_token: str, chat_id: int,
     session_ctx.on_tool_end   = _on_tool_end   # ← now wired!
 
     try:
-        config["_telegram_incoming"] = True
+        sctx = runtime.get_ctx(config)
+        sctx.telegram_incoming = True
         run_query_cb(q_text)
     except Exception as e:
         _jobs.fail(job.id, str(e))
@@ -542,7 +544,7 @@ def _bg_runner(job, q_text: str, chat_token: str, chat_id: int,
         session_ctx.on_text_chunk = None
         session_ctx.on_tool_start = None
         session_ctx.on_tool_end   = None
-        config.pop("_telegram_incoming", None)
+        sctx.telegram_incoming = False
 
     # Finalize
     _edit_msg(force=True)

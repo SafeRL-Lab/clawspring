@@ -15,18 +15,21 @@ _slack_thread_local = threading.local()
 
 
 def _is_in_tg_turn(config: dict) -> bool:
+    import runtime
     return (getattr(_tg_thread_local, "active", False)
-            or bool(config.get("_in_telegram_turn", False)))
+            or bool(runtime.get_ctx(config).in_telegram_turn))
 
 
 def _is_in_wx_turn(config: dict) -> bool:
+    import runtime
     return (getattr(_wx_thread_local, "active", False)
-            or bool(config.get("_in_wechat_turn", False)))
+            or bool(runtime.get_ctx(config).in_wechat_turn))
 
 
 def _is_in_slack_turn(config: dict) -> bool:
+    import runtime
     return (getattr(_slack_thread_local, "active", False)
-            or bool(config.get("_in_slack_turn", False)))
+            or bool(runtime.get_ctx(config).in_slack_turn))
 
 
 # ── AskUserQuestion state ─────────────────────────────────────────────────
@@ -80,7 +83,7 @@ def ask_input_interactive(prompt: str, config: dict,
         if menu_text:
             payload += _re.sub(r'\x1b\[[0-9;]*m', '', menu_text).strip() + "\n\n"
         payload += f"❓ Input Required\n{clean_prompt}"
-        slack_channel = (config.get("_slack_current_channel")
+        slack_channel = (_runtime.get_ctx(config).slack_current_channel
                          or config.get("slack_channel", ""))
         _session_ctx.slack_send(slack_channel, payload)
         evt = _threading.Event()
@@ -100,7 +103,7 @@ def ask_input_interactive(prompt: str, config: dict,
         if menu_text:
             payload += _re.sub(r'\x1b\[[0-9;]*m', '', menu_text).strip() + "\n\n"
         payload += f"❓ 需要输入\n{clean_prompt}"
-        _session_ctx.wx_send(config.get("_wx_current_user_id", ""), payload)
+        _session_ctx.wx_send(_runtime.get_ctx(config).wx_current_user_id or "", payload)
         evt = _threading.Event()
         _session_ctx.wx_input_event = evt
         if not evt.wait(timeout=_INPUT_WAIT_TIMEOUT):

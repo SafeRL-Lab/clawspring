@@ -248,7 +248,8 @@ tmux is available on this system. You have direct tmux tools:
 
     # Plan mode instructions
     if config and config.get("permission_mode") == "plan":
-        plan_file = config.get("_plan_file", "")
+        import runtime
+        plan_file = runtime.get_ctx(config).plan_file or ""
         prompt += (
             "\n\n# Plan Mode (ACTIVE)\n"
             "You are in PLAN MODE. Important rules:\n"

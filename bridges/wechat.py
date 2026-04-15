@@ -341,7 +341,7 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                     continue
 
                 evt = session_ctx.wx_input_event
-                if evt and config.get("_wx_current_user_id") == from_uid:
+                if evt and getattr(runtime.get_ctx(config), "wx_current_user_id", None) == from_uid:
                     session_ctx.wx_input_value = text
                     evt.set()
                     continue
@@ -451,7 +451,8 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                     if slash_cb:
                         def _wx_slash_runner(_slash_text, _uid):
                             _wx_thread_local.active = True
-                            config["_wx_current_user_id"] = _uid
+                            sctx = runtime.get_ctx(config)
+                            sctx.wx_current_user_id = _uid
                             try:
                                 cmd_type = slash_cb(_slash_text)
                             except Exception as e:
@@ -459,7 +460,7 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                                 return
                             finally:
                                 _wx_thread_local.active = False
-                                config.pop("_wx_current_user_id", None)
+                                sctx.wx_current_user_id = None
                             if cmd_type == "simple":
                                 cmd_name = _slash_text.strip().split()[0]
                                 _wx_send(_uid, f"✅ {cmd_name} executed.", config)
@@ -669,8 +670,9 @@ def _wx_bg_runner(job, q_text: str, uid: str,
     session_ctx.on_tool_start = _on_tool_start
     session_ctx.on_tool_end   = _on_tool_end   # ← now wired
 
-    config["_wx_current_user_id"] = uid
-    config["_in_wechat_turn"] = True
+    sctx = runtime.get_ctx(config)
+    sctx.wx_current_user_id = uid
+    sctx.in_wechat_turn = True
     try:
         if run_query_cb:
             run_query_cb(q_text)
@@ -683,8 +685,8 @@ def _wx_bg_runner(job, q_text: str, uid: str,
         session_ctx.on_text_chunk = None
         session_ctx.on_tool_start = None
         session_ctx.on_tool_end   = None
-        config.pop("_in_wechat_turn", None)
-        config.pop("_wx_current_user_id", None)
+        sctx.in_wechat_turn = False
+        sctx.wx_current_user_id = None
 
     _typing_stop.set()
 

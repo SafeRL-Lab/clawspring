@@ -135,14 +135,17 @@ def cmd_plan(args: str, state, config) -> Union[bool, tuple]:
     """
     arg = args.strip()
 
-    plan_file = config.get("_plan_file", "")
+    import runtime
+    sctx = runtime.get_ctx(config)
+    plan_file = sctx.plan_file or ""
     in_plan_mode = config.get("permission_mode") == "plan"
 
     if arg == "done":
         if not in_plan_mode:
             err("Not in plan mode.")
             return True
-        prev = config.pop("_prev_permission_mode", "auto")
+        prev = sctx.prev_permission_mode or "auto"
+        sctx.prev_permission_mode = None
         config["permission_mode"] = prev
         info(f"Exited plan mode. Permission mode restored to: {prev}")
         if plan_file:
@@ -181,9 +184,9 @@ def cmd_plan(args: str, state, config) -> Union[bool, tuple]:
     plan_path = plans_dir / f"{session_id}.md"
     plan_path.write_text(f"# Plan: {arg}\n\n", encoding="utf-8")
 
-    config["_prev_permission_mode"] = config.get("permission_mode", "auto")
+    sctx.prev_permission_mode = config.get("permission_mode", "auto")
     config["permission_mode"] = "plan"
-    config["_plan_file"] = str(plan_path)
+    sctx.plan_file = str(plan_path)
 
     info("Plan mode activated (read-only except plan file).")
     info(f"Plan file: {plan_path}")

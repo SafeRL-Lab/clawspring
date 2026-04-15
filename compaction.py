@@ -229,7 +229,8 @@ def maybe_compact(state, config: dict) -> bool:
 def _restore_plan_context(config: dict) -> list:
     """If in plan mode, return messages that restore plan file context."""
     from pathlib import Path
-    plan_file = config.get("_plan_file", "")
+    import runtime
+    plan_file = runtime.get_ctx(config).plan_file or ""
     if not plan_file or config.get("permission_mode") != "plan":
         return []
     p = Path(plan_file)

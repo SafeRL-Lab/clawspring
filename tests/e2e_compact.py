@@ -84,7 +84,10 @@ def test_compact():
     tmpdir = Path(tempfile.mkdtemp())
     plan_file = tmpdir / "plan.md"
     plan_file.write_text("# Plan\n\n1. Do stuff\n2. More stuff\n", encoding="utf-8")
-    config = {"permission_mode": "plan", "_plan_file": str(plan_file)}
+    import runtime
+    config = {"permission_mode": "plan", "_session_id": "test_compact"}
+    sctx = runtime.get_session_ctx("test_compact")
+    sctx.plan_file = str(plan_file)
     result = _restore_plan_context(config)
     assert len(result) == 2
     assert "Plan file restored" in result[0]["content"]
@@ -98,7 +101,7 @@ def test_compact():
     print(SEP)
     empty_plan = tmpdir / "empty.md"
     empty_plan.write_text("", encoding="utf-8")
-    config["_plan_file"] = str(empty_plan)
+    sctx.plan_file = str(empty_plan)
     result = _restore_plan_context(config)
     assert result == []
     print("  Returns empty for empty plan file")

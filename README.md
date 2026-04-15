@@ -91,6 +91,12 @@ English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READM
 ## 🔥🔥🔥 News (Pacific Time)
 
  
+- Apr 14, 2026 (**v3.05.68**): **CI/CD, config/runtime separation, and module reorganization**
+  - **GitHub Actions CI** (`.github/workflows/ci.yml`) — added automated testing on every push and PR: `pytest` across Python 3.10–3.13, plus a package smoke test that installs via `pip install .` and verifies all modules are importable. No more silent packaging regressions.
+  - **Config/runtime separation** (`runtime.py`) — runtime state (`_proactive_thread`, `_pending_image`, `_plan_file`, bridge turn flags, etc.) moved out of the `config` dict into `RuntimeContext` fields. The `config` dict now holds only serializable user configuration. Added `runtime.get_ctx(config)` helper for easy access. Migrated 18 files; 327 tests pass.
+  - **Tool module reorganization** — 7 top-level `tools_*.py` files consolidated into a `tools/` package (`tools/security.py`, `tools/fs.py`, `tools/shell.py`, `tools/web.py`, `tools/notebook.py`, `tools/diagnostics.py`, `tools/interaction.py`). All existing `from tools import ...` code continues to work unchanged via `tools/__init__.py`.
+  - **Version bumped to 3.05.68.**
+
 - Apr 14, 2026 (**v3.05.67**): **Packaging fix, `/config` safety, and readline completion fix**
   - **Fix `ModuleNotFoundError` on `pip install` / `uv tool install`** (`pyproject.toml`) — 16 missing top-level modules (`logging_utils`, `agent_runner`, `tools_fs`, `tools_shell`, etc.) and the `monitor` package were not declared in `pyproject.toml`, causing `No module named 'logging_utils'` and similar crashes after installation (#36). All runtime modules are now correctly packaged.
   - **`/config` no longer exposes secrets** (`commands/config_cmd.py`) — the `/config` display now filters out sensitive keys (`api_key`, `telegram_token`, `wechat_token`, and any key ending in `_key`, `_token`, or `_secret`) as well as internal runtime keys (prefixed with `_`). Previously, `/config` crashed with `TypeError` on non-serializable `threading.Thread` objects and leaked credentials.

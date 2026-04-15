@@ -253,7 +253,8 @@ def _slack_poll_loop(token: str, channel: str, config: dict) -> str:
                     if slash_cb:
                         def _slack_slash_runner(_slash_text, _ch):
                             _slack_thread_local.active = True
-                            config["_slack_current_channel"] = _ch
+                            sctx = runtime.get_ctx(config)
+                            sctx.slack_current_channel = _ch
                             try:
                                 cmd_type = slash_cb(_slash_text)
                             except Exception as e:
@@ -261,7 +262,7 @@ def _slack_poll_loop(token: str, channel: str, config: dict) -> str:
                                 return
                             finally:
                                 _slack_thread_local.active = False
-                                config.pop("_slack_current_channel", None)
+                                sctx.slack_current_channel = None
                             if cmd_type == "simple":
                                 cmd_name = _slash_text.strip().split()[0]
                                 _slack_send(token, _ch, f"✅ {cmd_name} executed.")
@@ -464,8 +465,9 @@ def _sl_bg_runner(job, q_text: str, token: str, channel: str,
     session_ctx.on_tool_start = _on_tool_start
     session_ctx.on_tool_end   = _on_tool_end
 
-    config["_slack_current_channel"] = channel
-    config["_in_slack_turn"] = True
+    sctx = runtime.get_ctx(config)
+    sctx.slack_current_channel = channel
+    sctx.in_slack_turn = True
     try:
         if run_query_cb:
             run_query_cb(q_text)
@@ -478,8 +480,8 @@ def _sl_bg_runner(job, q_text: str, token: str, channel: str,
         session_ctx.on_text_chunk = None
         session_ctx.on_tool_start = None
         session_ctx.on_tool_end   = None
-        config.pop("_in_slack_turn", None)
-        config.pop("_slack_current_channel", None)
+        sctx.in_slack_turn = False
+        sctx.slack_current_channel = None
 
     _update_placeholder()
 

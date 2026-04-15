@@ -7,6 +7,8 @@ each other's callbacks, input events, and agent state.
 
 Use get_session_ctx(session_id) to obtain the context for a specific session.
 Use release_session_ctx(session_id) when a session ends to free the entry.
+Use get_ctx(config) as a shortcut: reads config["_session_id"] and returns
+the corresponding RuntimeContext.
 
 The module-level `ctx` alias points to the "default" session and exists only
 for backward compatibility with single-session CLI usage.
@@ -65,6 +67,32 @@ class RuntimeContext:
     on_tool_start:  Optional[Callable[[str, dict], None]] = None
     on_tool_end:    Optional[Callable[[str, str], None]] = None
 
+    # ── Runtime state (previously stored in config["_xxx"]) ──────────────────
+
+    # Proactive polling
+    proactive_enabled:  bool = False
+    proactive_interval: int = 300
+    proactive_thread:   Optional[threading.Thread] = None
+    last_interaction_time: float = 0.0
+
+    # Bridge turn flags
+    in_telegram_turn: bool = False
+    in_wechat_turn:   bool = False
+    in_slack_turn:    bool = False
+    telegram_incoming: bool = False
+    wx_current_user_id:   str = ""
+    slack_current_channel: str = ""
+
+    # Transient per-turn data
+    pending_image: Optional[str] = None
+
+    # Plan mode
+    plan_file: Optional[str] = None
+    prev_permission_mode: Optional[str] = None
+
+    # Voice
+    voice_device_index: Optional[int] = None
+
 
 # ── Per-session registry ───────────────────────────────────────────────────
 
@@ -84,6 +112,11 @@ def release_session_ctx(session_id: str) -> None:
     """Remove the RuntimeContext for a session that has ended."""
     with _registry_lock:
         _registry.pop(session_id, None)
+
+
+def get_ctx(config: dict) -> RuntimeContext:
+    """Shortcut: return the RuntimeContext for the session stored in config."""
+    return get_session_ctx(config.get("_session_id", "default"))
 
 
 # ── Backward-compat alias ──────────────────────────────────────────────────

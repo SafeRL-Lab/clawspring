@@ -1,13 +1,13 @@
 """Tool definitions and implementations for CheetahClaws.
 
 Implementations live in focused sub-modules:
-  tools_security.py     _check_path_allowed, _is_safe_bash
-  tools_fs.py           Read / Write / Edit / Glob + diff helpers
-  tools_shell.py        Bash / Grep
-  tools_web.py          WebFetch / WebSearch
-  tools_notebook.py     NotebookEdit
-  tools_diagnostics.py  GetDiagnostics
-  tools_interaction.py  AskUserQuestion / SleepTimer / bridge routing
+  tools.security     _check_path_allowed, _is_safe_bash
+  tools.fs           Read / Write / Edit / Glob + diff helpers
+  tools.shell        Bash / Grep
+  tools.web          WebFetch / WebSearch
+  tools.notebook     NotebookEdit
+  tools.diagnostics  GetDiagnostics
+  tools.interaction  AskUserQuestion / SleepTimer / bridge routing
 
 This module re-exports every public symbol for backward compatibility,
 holds the TOOL_SCHEMAS list, the execute_tool dispatcher, and calls
@@ -19,24 +19,24 @@ from typing import Callable, Optional
 
 # ── Re-exports (backward compat) ──────────────────────────────────────────
 
-from tools_security import _check_path_allowed, _is_safe_bash  # noqa: F401
+from tools.security import _check_path_allowed, _is_safe_bash  # noqa: F401
 
-from tools_fs import (  # noqa: F401
+from tools.fs import (  # noqa: F401
     _read, _write, _edit, _glob,
     generate_unified_diff, maybe_truncate_diff,
 )
 
-from tools_shell import _bash, _grep, _kill_proc_tree, _has_rg  # noqa: F401
+from tools.shell import _bash, _grep, _kill_proc_tree, _has_rg  # noqa: F401
 
-from tools_web import _webfetch, _websearch  # noqa: F401
+from tools.web import _webfetch, _websearch  # noqa: F401
 
-from tools_notebook import _notebook_edit, _parse_cell_id  # noqa: F401
+from tools.notebook import _notebook_edit, _parse_cell_id  # noqa: F401
 
-from tools_diagnostics import (  # noqa: F401
+from tools.diagnostics import (  # noqa: F401
     _get_diagnostics, _detect_language, _run_quietly,
 )
 
-from tools_interaction import (  # noqa: F401
+from tools.interaction import (  # noqa: F401
     _tg_thread_local, _wx_thread_local, _slack_thread_local,
     _is_in_tg_turn, _is_in_wx_turn, _is_in_slack_turn,
     _ask_user_question, ask_input_interactive, drain_pending_questions,
@@ -526,9 +526,11 @@ def _enter_plan_mode(params: dict, config: dict) -> str:
         header = f"# Plan: {task_desc}\n\n" if task_desc else "# Plan\n\n"
         plan_path.write_text(header, encoding="utf-8")
 
-    config["_prev_permission_mode"] = config.get("permission_mode", "auto")
-    config["permission_mode"]        = "plan"
-    config["_plan_file"]             = str(plan_path)
+    import runtime
+    sctx = runtime.get_ctx(config)
+    sctx.prev_permission_mode = config.get("permission_mode", "auto")
+    config["permission_mode"]  = "plan"
+    sctx.plan_file             = str(plan_path)
     return (
         f"Plan mode activated. Plan file: {plan_path}\n"
         "Write your step-by-step plan to the plan file, then call ExitPlanMode when ready to implement."
@@ -538,7 +540,9 @@ def _enter_plan_mode(params: dict, config: dict) -> str:
 def _exit_plan_mode(params: dict, config: dict) -> str:
     if config.get("permission_mode") != "plan":
         return "Not in plan mode."
-    plan_file = config.get("_plan_file", "")
+    import runtime
+    sctx = runtime.get_ctx(config)
+    plan_file = sctx.plan_file or ""
     plan_content = ""
     if plan_file:
         try:
@@ -558,8 +562,9 @@ def _exit_plan_mode(params: dict, config: dict) -> str:
             f"({plan_file}) before exiting plan mode."
         )
 
-    config["permission_mode"] = config.pop("_prev_permission_mode", "auto")
-    config.pop("_plan_file", None)
+    config["permission_mode"] = sctx.prev_permission_mode or "auto"
+    sctx.prev_permission_mode = None
+    sctx.plan_file = None
     return (
         f"Plan mode exited. Resuming normal permissions.\n\n"
         f"Plan content:\n{plan_content}\n\n"
