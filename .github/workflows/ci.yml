@@ -66,7 +66,7 @@ jobs:
               'tools', 'tools.security', 'tools.fs', 'tools.shell',
               'tools.web', 'tools.notebook', 'tools.diagnostics',
               'tools.interaction',
-              'mcp', 'monitor', 'multi_agent', 'plugin', 'skill', 'task',
+              'cc_mcp', 'monitor', 'multi_agent', 'plugin', 'skill', 'task',
               'voice', 'video', 'checkpoint', 'ui', 'bridges', 'commands',
               'modular',
           ]

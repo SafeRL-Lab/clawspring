@@ -689,16 +689,26 @@ def stream_ollama(
 
     try:
         resp_cm = urllib.request.urlopen(req)
+    except urllib.error.URLError as e:
+        raise ConnectionError(
+            f"Cannot connect to Ollama at {base_url}. "
+            f"Is it running? Start with: ollama serve\n  ({e})"
+        ) from e
     except urllib.error.HTTPError as e:
         if e.code == 500 and "tools" in payload:
             # Model doesn't support tool calling — retry without tools
             print(
-                f"\n\033[33m[warn] {model} returned HTTP 500 (likely no tool-calling support)."
-                " Retrying without tools.\033[0m"
+                f"\n\033[33m[warn] {model} does not support tool calling."
+                " Retrying in chat-only mode (no file editing, search, etc.).\033[0m"
             )
             payload.pop("tools", None)
             req = _make_request(payload)
             resp_cm = urllib.request.urlopen(req)
+        elif e.code == 404:
+            raise ValueError(
+                f"Ollama model '{model}' not found. Pull it with: ollama pull {model}\n"
+                f"  Or pick from local models: /model ollama"
+            ) from e
         else:
             raise
 

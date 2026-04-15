@@ -364,18 +364,32 @@ def cmd_doctor(args: str, state, config) -> bool:
         if env_var and os.environ.get(env_var, ""):
             _ok(f"{pname} key ({env_var}): set")
 
+    # ── General network connectivity ──
     print()
-    for mod, desc in [
-        ("rich", "Rich (live markdown rendering)"),
-        ("PIL", "Pillow (clipboard image /image)"),
-        ("sounddevice", "sounddevice (voice recording)"),
-        ("faster_whisper", "faster-whisper (local STT)"),
+    try:
+        import urllib.request
+        urllib.request.urlopen("https://httpbin.org/status/200", timeout=5)
+        _ok("Internet connectivity: OK")
+    except Exception:
+        _fail("Internet connectivity: cannot reach external hosts")
+
+    # ── Dependencies ──
+    print()
+    for mod, desc, required in [
+        ("rich", "Rich (live markdown rendering)", True),
+        ("pyte", "pyte (terminal emulator for bridges)", True),
+        ("PIL", "Pillow (clipboard image /image)", False),
+        ("sounddevice", "sounddevice (voice recording)", False),
+        ("faster_whisper", "faster-whisper (local STT)", False),
     ]:
         try:
             __import__(mod)
             _ok(desc)
         except ImportError:
-            _warn(f"{desc}: not installed")
+            if required:
+                _fail(f"{desc}: not installed (required)")
+            else:
+                _warn(f"{desc}: not installed (optional)")
 
     print()
     claude_md = Path.cwd() / "CLAUDE.md"
@@ -414,6 +428,165 @@ def cmd_doctor(args: str, state, config) -> bool:
         _print_safe(clr(summary, "green"))
 
     return True
+
+
+# ── Setup wizard ──────────────────────────────────────────────────────────
+
+def run_setup_wizard(config: dict) -> None:
+    """Interactive first-run setup: pick provider, set API key, verify."""
+    from config import save_config
+    from providers import PROVIDERS, detect_provider, get_api_key
+
+    print()
+    info("Welcome to CheetahClaws! Let's get you set up.\n")
+
+    # ── Step 1: Pick provider ──
+    providers_list = [
+        ("ollama",    "Ollama (local, free, no API key)"),
+        ("anthropic", "Anthropic Claude (cloud, API key required)"),
+        ("openai",    "OpenAI GPT (cloud, API key required)"),
+        ("gemini",    "Google Gemini (cloud, API key required)"),
+        ("deepseek",  "DeepSeek (cloud, API key required)"),
+        ("custom",    "Custom OpenAI-compatible endpoint"),
+    ]
+
+    info("Which provider would you like to use?\n")
+    for i, (pname, desc) in enumerate(providers_list):
+        prov = PROVIDERS.get(pname, {})
+        env_var = prov.get("api_key_env", "")
+        env_set = bool(env_var and os.environ.get(env_var))
+        marker = clr(" (key detected)", "green") if env_set else ""
+        print(f"  {clr(f'[{i+1}]', 'yellow')} {desc}{marker}")
+
+    print()
+    try:
+        choice = input(clr("  Select [1-6] (default: 1 for Ollama): ", "cyan")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    idx = int(choice) - 1 if choice.isdigit() and 1 <= int(choice) <= len(providers_list) else 0
+    chosen_pname, chosen_desc = providers_list[idx]
+    prov = PROVIDERS.get(chosen_pname, {})
+
+    # ── Step 2: Set model ──
+    models = prov.get("models", [])
+    if chosen_pname == "ollama":
+        # Check if Ollama is running and list local models
+        try:
+            from providers import list_ollama_models
+            base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            local_models = list_ollama_models(base_url)
+            if local_models:
+                info(f"\nLocal Ollama models found:")
+                for i, m in enumerate(local_models[:10]):
+                    print(f"  {clr(f'[{i+1}]', 'yellow')} {m}")
+                print()
+                try:
+                    mc = input(clr("  Select a model number (default: 1): ", "cyan")).strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                mi = int(mc) - 1 if mc.isdigit() and 1 <= int(mc) <= len(local_models) else 0
+                config["model"] = f"ollama/{local_models[mi]}"
+            else:
+                warn("Ollama is running but no models found. Pull one with: ollama pull gemma4:e4b")
+                config["model"] = "ollama/gemma4:e4b"
+        except Exception:
+            warn("Cannot reach Ollama. Make sure it's running: ollama serve")
+            config["model"] = "ollama/gemma4:e4b"
+    elif models:
+        config["model"] = f"{chosen_pname}/{models[0]}" if chosen_pname != "anthropic" else models[0]
+        info(f"\nDefault model: {config['model']}")
+    else:
+        config["model"] = chosen_pname + "/default"
+
+    # ── Step 3: Set API key (if needed) ──
+    env_var = prov.get("api_key_env", "")
+    key_field = f"{chosen_pname}_api_key"
+    existing_key = os.environ.get(env_var, "") or config.get(key_field, "")
+
+    if chosen_pname not in ("ollama", "lmstudio"):
+        if existing_key:
+            ok(f"API key detected ({existing_key[:4]}...{existing_key[-4:]})")
+        else:
+            print()
+            info(f"Enter your {chosen_desc.split('(')[0].strip()} API key")
+            if env_var:
+                info(f"(or set {env_var} env var and restart)")
+            try:
+                key_input = input(clr("  API key: ", "cyan")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if key_input:
+                config[key_field] = key_input
+                existing_key = key_input
+
+    if chosen_pname == "custom":
+        base = config.get("custom_base_url", "")
+        if not base:
+            print()
+            try:
+                base = input(clr("  Base URL (e.g. http://localhost:8000/v1): ", "cyan")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if base:
+                config["custom_base_url"] = base
+
+    # ── Step 4: Verify connection ──
+    print()
+    info("Verifying connection...")
+    try:
+        import urllib.request, urllib.error
+        if chosen_pname == "ollama":
+            base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            urllib.request.urlopen(f"{base_url}/api/tags", timeout=5)
+            ok("Ollama: connected!")
+        elif chosen_pname == "anthropic" and existing_key:
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=json.dumps({"model": config["model"], "max_tokens": 1,
+                                 "messages": [{"role": "user", "content": "hi"}]}).encode(),
+                headers={"x-api-key": existing_key, "anthropic-version": "2023-06-01",
+                          "content-type": "application/json"},
+            )
+            try:
+                urllib.request.urlopen(req, timeout=10)
+                ok("Anthropic API: connected!")
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    ok("Anthropic API: key valid (rate limited)")
+                elif e.code == 401:
+                    err("Invalid API key. You can fix it later with: /config anthropic_api_key=YOUR_KEY")
+                else:
+                    warn(f"Anthropic API: HTTP {e.code}")
+        elif existing_key:
+            base = prov.get("base_url", config.get("custom_base_url", ""))
+            if base:
+                req = urllib.request.Request(
+                    base.rstrip("/") + "/models",
+                    headers={"Authorization": f"Bearer {existing_key}"},
+                )
+                try:
+                    urllib.request.urlopen(req, timeout=10)
+                    ok(f"{chosen_pname} API: connected!")
+                except urllib.error.HTTPError as e:
+                    if e.code == 401:
+                        err("Invalid API key. Fix later with: /config")
+                    elif e.code == 429:
+                        ok(f"{chosen_pname} API: key valid (rate limited)")
+                    else:
+                        warn(f"{chosen_pname} API: HTTP {e.code}")
+    except Exception as e:
+        warn(f"Connection test failed: {e}")
+
+    # ── Save ──
+    save_config(config)
+    print()
+    ok(f"Setup complete! Model: {config['model']}")
+    info("Type a message to start, or /help for available commands.\n")
 
 
 def cmd_proactive(args: str, state, config) -> bool:

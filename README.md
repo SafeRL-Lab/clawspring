@@ -91,6 +91,16 @@ English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READM
 ## 🔥🔥🔥 News (Pacific Time)
 
  
+- Apr 14, 2026 (**v3.05.70**): **Setup wizard, Ollama UX, context indicator, and session robustness**
+  - **Interactive setup wizard** (`commands/core.py`, `cheetahclaws.py`) — `cheetahclaws --setup` or `/setup` launches a guided setup: pick from 6 providers (Ollama, Anthropic, OpenAI, Gemini, DeepSeek, custom), auto-detect env vars, set API key, verify connection. Auto-triggers on first run (no `config.json`). API key missing warning now suggests `--setup`.
+  - **Ollama UX improvements** — `/model` now shows live local Ollama models (via `/api/tags`) instead of a hardcoded list. `/model ollama` triggers the interactive model picker. Connection failures and 404 errors now give actionable messages ("Is Ollama running?", "Pull it with: ollama pull ..."). Tool-calling fallback message clarified.
+  - **Context usage in prompt** — the REPL prompt now shows context window usage as a percentage: dim when <40%, yellow at 40-70%, red at >=70%. Users can see when compaction is approaching without running `/context`.
+  - **Session save/resume robustness** — atomic writes (write-to-temp + rename) prevent corruption on crash. `/load` and `/resume` now catch corrupted JSON with friendly error messages and suggest daily backups. History file corruption no longer blocks auto-save.
+  - **Version from pyproject.toml** — `VERSION` is now read dynamically from `pyproject.toml` (single source of truth), no more hardcoded version drift. Falls back to `importlib.metadata` when installed as a package.
+  - **`/doctor` enhanced** — added internet connectivity check and `pyte` dependency check; optional vs required deps now distinguished (`[FAIL]` for missing required deps).
+  - **Fix `mcp` namespace collision** — renamed internal `mcp/` package to `cc_mcp/` to avoid conflict with the official `mcp` pip package (Anthropic MCP SDK). Previously, `pip install .` followed by `cheetahclaws` crashed with `ImportError: cannot import name 'MCPClient'`.
+  - **Version bumped to 3.05.70.**
+
 - Apr 14, 2026 (**v3.05.69**): **Actionable error messages, dependency sync, and contributor guide**
   - **Actionable API error messages** (`cheetahclaws.py`) — the REPL error handler now detects 6 common failure modes (invalid API key, network timeout, Ollama not running, rate limit, model not found, insufficient credits) and prints a specific hint alongside the error instead of a generic message. The proactive watcher background thread no longer dumps raw Python tracebacks to stdout — errors are routed through `logging_utils` instead.
   - **Dependency sync** (`pyproject.toml`, `requirements.txt`) — `pyte>=0.8.0` added to `pyproject.toml` core dependencies (was only in `requirements.txt`, causing import failures after `pip install .`). `requirements.txt` rewritten to mirror `pyproject.toml` as single source of truth, with optional deps (`sounddevice`, `Pillow`) clearly marked.

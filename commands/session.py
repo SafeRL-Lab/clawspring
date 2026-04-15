@@ -93,38 +93,55 @@ def save_latest(args: str, state, config=None) -> bool:
     data = _build_session_data(state, session_id=sid)
     payload = json.dumps(data, indent=2, default=str)
 
-    MR_SESSION_DIR.mkdir(parents=True, exist_ok=True)
-    latest_path = MR_SESSION_DIR / "session_latest.json"
-    latest_path.write_text(payload)
+    def _atomic_write(path: Path, content: str):
+        """Write to a temp file then rename — prevents corruption on crash."""
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
 
-    day_dir = DAILY_DIR / date_str
-    day_dir.mkdir(parents=True, exist_ok=True)
-    daily_path = day_dir / f"session_{ts}_{sid}.json"
-    daily_path.write_text(payload)
+    try:
+        MR_SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        latest_path = MR_SESSION_DIR / "session_latest.json"
+        _atomic_write(latest_path, payload)
+    except Exception as e:
+        err(f"Failed to save session: {e}")
+        return True
 
-    daily_files = sorted(day_dir.glob("session_*.json"))
-    for old in daily_files[:-daily_limit]:
-        old.unlink(missing_ok=True)
+    try:
+        day_dir = DAILY_DIR / date_str
+        day_dir.mkdir(parents=True, exist_ok=True)
+        daily_path = day_dir / f"session_{ts}_{sid}.json"
+        _atomic_write(daily_path, payload)
 
-    if SESSION_HIST_FILE.exists():
-        try:
-            hist = json.loads(SESSION_HIST_FILE.read_text())
-        except Exception:
+        daily_files = sorted(day_dir.glob("session_*.json"))
+        for old in daily_files[:-daily_limit]:
+            old.unlink(missing_ok=True)
+    except Exception as e:
+        warn(f"Daily backup failed: {e}")
+        daily_path = Path("(skipped)")
+
+    try:
+        if SESSION_HIST_FILE.exists():
+            try:
+                hist = json.loads(SESSION_HIST_FILE.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, Exception):
+                hist = {"total_turns": 0, "sessions": []}
+        else:
             hist = {"total_turns": 0, "sessions": []}
-    else:
-        hist = {"total_turns": 0, "sessions": []}
 
-    hist["sessions"].append(data)
-    hist["total_turns"] = sum(s.get("turn_count", 0) for s in hist["sessions"])
+        hist["sessions"].append(data)
+        hist["total_turns"] = sum(s.get("turn_count", 0) for s in hist["sessions"])
 
-    if len(hist["sessions"]) > history_limit:
-        hist["sessions"] = hist["sessions"][-history_limit:]
+        if len(hist["sessions"]) > history_limit:
+            hist["sessions"] = hist["sessions"][-history_limit:]
 
-    SESSION_HIST_FILE.write_text(json.dumps(hist, indent=2, default=str))
+        _atomic_write(SESSION_HIST_FILE, json.dumps(hist, indent=2, default=str))
+    except Exception as e:
+        warn(f"History update failed: {e}")
 
     ok(f"Session saved → {latest_path}")
-    ok(f"             → {daily_path}  (id: {sid})")
-    ok(f"             → {SESSION_HIST_FILE}  ({len(hist['sessions'])} sessions / {hist['total_turns']} total turns)")
+    if str(daily_path) != "(skipped)":
+        ok(f"             → {daily_path}  (id: {sid})")
     return True
 
 
@@ -270,7 +287,17 @@ def cmd_load(args: str, state, config) -> bool:
             err(f"File not found: {path}")
             return True
 
-    data = _migrate_session(json.loads(path.read_text()))
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = _migrate_session(json.loads(raw))
+    except json.JSONDecodeError as e:
+        err(f"Session file is corrupted: {path}")
+        warn(f"  JSON error: {e}")
+        warn(f"  Try loading a different session from: /load")
+        return True
+    except Exception as e:
+        err(f"Cannot read session file: {e}")
+        return True
     state.messages = data.get("messages", [])
     state.turn_count = data.get("turn_count", 0)
     state.total_input_tokens = data.get("total_input_tokens", 0)
@@ -297,7 +324,21 @@ def cmd_resume(args: str, state, config) -> bool:
         err(f"File not found: {path}")
         return True
 
-    data = _migrate_session(json.loads(path.read_text()))
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = _migrate_session(json.loads(raw))
+    except json.JSONDecodeError as e:
+        err(f"Session file is corrupted: {path}")
+        warn(f"  JSON error: {e}")
+        # Try falling back to daily backups
+        from config import DAILY_DIR
+        daily_files = sorted(DAILY_DIR.rglob("session_*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if daily_files:
+            warn(f"  Try loading a recent backup: /load {daily_files[0]}")
+        return True
+    except Exception as e:
+        err(f"Cannot read session file: {e}")
+        return True
     state.messages = data.get("messages", [])
     state.turn_count = data.get("turn_count", 0)
     state.total_input_tokens = data.get("total_input_tokens", 0)

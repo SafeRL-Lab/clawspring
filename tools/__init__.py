@@ -494,7 +494,7 @@ import multi_agent.tools as _multiagent_tools  # noqa: F401
 from multi_agent.tools import get_agent_manager as _get_agent_manager  # noqa: F401
 
 import skill.tools as _skill_tools  # noqa: F401
-import mcp.tools   as _mcp_tools    # noqa: F401
+import cc_mcp.tools   as _mcp_tools    # noqa: F401
 
 try:
     from plugin.loader import register_plugin_tools as _reg_plugin_tools

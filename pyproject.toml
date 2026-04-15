@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cheetahclaws"
-version = "3.05.59"
+version = "3.05.70"
 description = "CheetahClaws: A Fast, Hackable Python AI Coding Assistant"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,7 +49,7 @@ py-modules = [
 ]
 packages = [
     "tools",
-    "mcp", "memory", "monitor", "multi_agent", "plugin", "skill", "task",
+    "cc_mcp", "memory", "monitor", "multi_agent", "plugin", "skill", "task",
     "voice", "video", "checkpoint",
     "ui", "bridges", "commands",
     "modular", "modular.video", "modular.voice",

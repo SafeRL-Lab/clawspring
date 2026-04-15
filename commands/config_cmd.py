@@ -19,6 +19,21 @@ def cmd_model(args: str, _state, config) -> bool:
         info(f"Current model:    {model}  (provider: {pname})")
         info("\nAvailable models by provider:")
         for pn, pdata in PROVIDERS.items():
+            if pn == "ollama":
+                # Show live local models instead of hardcoded list
+                from providers import list_ollama_models
+                base_url = (
+                    os.environ.get("OLLAMA_BASE_URL")
+                    or config.get("ollama_base_url")
+                    or pdata.get("base_url", "http://localhost:11434")
+                )
+                local = list_ollama_models(base_url)
+                if local:
+                    info(f"  {'ollama':12s}  " + ", ".join(local[:6]) + ("..." if len(local) > 6 else ""))
+                    info(f"  {'':12s}  " + clr(f"({len(local)} local models — /model ollama to pick)", "dim"))
+                else:
+                    info(f"  {'ollama':12s}  " + clr("(not running or no models pulled)", "dim"))
+                continue
             ms = pdata.get("models", [])
             if ms:
                 info(f"  {pn:12s}  " + ", ".join(ms[:4]) + ("..." if len(ms) > 4 else ""))
@@ -28,6 +43,11 @@ def cmd_model(args: str, _state, config) -> bool:
         info("  e.g. /model kimi:moonshot-v1-32k")
     else:
         m = args.strip()
+        # "/model ollama" with no model name → interactive picker
+        if m == "ollama":
+            if _interactive_ollama_picker(config):
+                return True
+            return True
         if "/" not in m and ":" in m:
             left, right = m.split(":", 1)
             if left in PROVIDERS:

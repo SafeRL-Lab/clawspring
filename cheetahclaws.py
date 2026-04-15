@@ -154,7 +154,7 @@ from commands.config_cmd import (
 from commands.core import (
     cmd_help, cmd_clear, cmd_context, cmd_cost, cmd_compact,
     cmd_init, cmd_export, cmd_copy, cmd_status, cmd_doctor,
-    cmd_proactive, cmd_image,
+    cmd_proactive, cmd_image, run_setup_wizard,
 )
 
 # ── Checkpoint / Plan commands ─────────────────────────────────────────────
@@ -184,7 +184,23 @@ from tools import (
 # ── Live session context (replaces config["_run_query_callback"] etc.) ─────
 import runtime
 
-VERSION = "3.05.66"
+def _read_version() -> str:
+    """Read version from pyproject.toml (single source of truth)."""
+    try:
+        _toml = Path(__file__).resolve().parent / "pyproject.toml"
+        for _line in _toml.read_text(encoding="utf-8").splitlines():
+            if _line.startswith("version"):
+                return _line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("cheetahclaws")
+    except Exception:
+        return "0.0.0"
+
+
+VERSION = _read_version()
 
 # ── Load feature modules from modular/ ecosystem ───────────────────────────
 # Commands from modular/ are merged into COMMANDS after the dict is built.
@@ -314,6 +330,7 @@ COMMANDS = {
     "copy":        cmd_copy,
     "status":      cmd_status,
     "doctor":      cmd_doctor,
+    "setup":       lambda a, s, c: (run_setup_wizard(c), True)[1],
     "exit":        cmd_exit,
     "quit":        cmd_exit,
     "resume":      cmd_resume,
@@ -446,6 +463,7 @@ _CMD_META: dict[str, tuple[str, list[str]]] = {
     "copy":        ("Copy last response to clipboard",      []),
     "status":      ("Show session status and model info",   []),
     "doctor":      ("Diagnose installation health",         []),
+    "setup":       ("Run interactive setup wizard",         []),
     "exit":        ("Exit cheetahclaws",              []),
     "quit":        ("Exit (alias for /exit)",             []),
     "resume":      ("Resume last session",                []),
@@ -1036,7 +1054,22 @@ def repl(config: dict, initial_prompt: str = None):
         _print_background_notifications()
         try:
             cwd_short = Path.cwd().name
-            prompt = clr(f"\n[{cwd_short}] ", "dim") + clr("» ", "cyan", "bold")
+            # Context usage indicator in prompt
+            ctx_hint = ""
+            try:
+                from compaction import estimate_tokens, get_context_limit
+                used = estimate_tokens(state.messages)
+                limit = get_context_limit(config.get("model", ""))
+                pct = int(used / limit * 100) if limit else 0
+                if pct >= 70:
+                    ctx_hint = clr(f" {pct}%", "red")
+                elif pct >= 40:
+                    ctx_hint = clr(f" {pct}%", "yellow")
+                elif state.messages:
+                    ctx_hint = clr(f" {pct}%", "dim")
+            except Exception:
+                pass
+            prompt = clr(f"\n[{cwd_short}]", "dim") + ctx_hint + clr(" ", "dim") + clr("» ", "cyan", "bold")
             user_input = _read_input(prompt)
         except (EOFError, KeyboardInterrupt):
             print()
@@ -1335,6 +1368,7 @@ def main():
     parser.add_argument("--thinking", action="store_true",
                         help="Enable extended thinking")
     parser.add_argument("--version", action="store_true", help="Print version")
+    parser.add_argument("--setup", action="store_true", help="Run interactive setup wizard")
     parser.add_argument("-h", "--help", action="store_true", help="Show help")
 
     args = parser.parse_args()
@@ -1374,14 +1408,22 @@ def main():
     if args.thinking:
         config["thinking"] = True
 
-    # Check API key for active provider (warn only, don't block local providers)
-    if not has_api_key(config):
+    # ── Setup wizard: --setup flag or first-run auto-trigger ─────────────
+    from config import CONFIG_FILE
+    is_first_run = not CONFIG_FILE.exists() or os.path.getsize(CONFIG_FILE) < 5
+    if args.setup or (is_first_run and sys.stdin.isatty() and not args.print_mode):
+        run_setup_wizard(config)
+        # Reload after wizard may have changed config
+        config = load_config()
+    elif not has_api_key(config):
+        # Check API key for active provider (warn only, don't block local providers)
         pname = detect_provider(config["model"])
         prov  = PROVIDERS.get(pname, {})
         env   = prov.get("api_key_env", "")
         if env:   # local providers like ollama have no env key requirement
             warn(f"No API key found for provider '{pname}'. "
-                 f"Set {env} or run: /config {pname}_api_key=YOUR_KEY")
+                 f"Set {env} or run: /config {pname}_api_key=YOUR_KEY"
+                 f"\n  Or run: cheetahclaws --setup")
 
     initial = " ".join(args.prompt) if args.prompt else None
     if args.print_mode and not initial:
