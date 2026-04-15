@@ -1,0 +1,13 @@
+{
+  "name": "example-plugin",
+  "version": "0.1.0",
+  "description": "Example CheetahClaws plugin — copy this as a starting point for your own plugin.",
+  "author": "CheetahClaws Team",
+  "tags": ["example", "template"],
+  "tools": ["tools"],
+  "commands": ["cmd"],
+  "skills": ["skills/example-skill.md"],
+  "mcp_servers": {},
+  "dependencies": [],
+  "homepage": "https://github.com/SafeRL-Lab/cheetahclaws"
+}

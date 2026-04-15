@@ -772,6 +772,8 @@ Detailed guides have been moved to [`docs/guides/`](docs/guides/) to keep this R
 | [**Voice & Video**](docs/guides/voice-and-video.md) | Voice input (offline Whisper), Video Content Factory, TTS Content Factory |
 | [**Advanced**](docs/guides/advanced.md) | Brainstorm, SSJ Developer Mode, Tmux, Proactive monitoring, Checkpoints, Plan mode, Session management, Cloud sync |
 | [**Recipes**](docs/guides/recipes.md) | Step-by-step examples: code review with Ollama, Telegram remote control, autonomous research, bug fix workflow |
+| [**Plugin Authoring**](docs/guides/plugin-authoring.md) | Build your own plugin: tools, commands, skills, MCP servers, publishing checklist |
+| [**Example Plugin**](examples/example-plugin/) | Copy-and-edit starter template with working tools, commands, and skills |
 | [**Contributing**](CONTRIBUTING.md) | Project structure, architecture guide, PR checklist |
 
 ---
