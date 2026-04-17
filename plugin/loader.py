@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import re
+
+from .store import install_dependencies
 import sys
 from pathlib import Path
 
@@ -107,6 +110,31 @@ def load_plugin_mcp_configs(scope: PluginScope | None = None) -> dict:
     return configs
 
 
+def _strip_version_spec(dep: str) -> str:
+    """Extract bare package name from a pip dependency specifier."""
+    return re.split(r"[>=<!~\[]", dep)[0].strip().replace("-", "_").lower()
+
+
+def check_missing_deps(deps: list) -> list:
+    """Return dependencies that are not currently installed."""
+    return [d for d in deps if importlib.util.find_spec(_strip_version_spec(d)) is None]
+
+
+def ensure_plugin_dependencies(entry) -> None:
+    """Auto-install missing dependencies declared in plugin manifest."""
+    manifest_path = entry.path / "manifest.json"
+    if not manifest_path.exists():
+        return
+    import json
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    deps = data.get("dependencies", [])
+    if not deps:
+        return
+    missing = check_missing_deps(deps)
+    if missing:
+        install_dependencies(missing)
+
+
 def _import_plugin_module(entry: PluginEntry, module_name: str):
     """Dynamically import a module from a plugin directory."""
     # Ensure plugin dir is on sys.path
@@ -131,7 +159,11 @@ def _import_plugin_module(entry: PluginEntry, module_name: str):
                 mod = importlib.util.module_from_spec(spec)
                 sys.modules[unique_name] = mod
                 try:
-                    spec.loader.exec_module(mod)
+                    try:
+                        spec.loader.exec_module(mod)
+                    except ModuleNotFoundError:
+                        ensure_plugin_dependencies(entry)
+                        spec.loader.exec_module(mod)
                     return mod
                 except Exception as e:
                     print(f"[plugin] Failed to load {module_name} from {entry.name}: {e}")

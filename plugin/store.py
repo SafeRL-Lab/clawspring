@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import os
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,34 @@ def _plugin_cfg_for(scope: PluginScope) -> Path:
 
 # ── List ──────────────────────────────────────────────────────────────────────
 
+PLUGIN_PATH_ENV = "CHEETAHCLAWS_PLUGIN_PATH"
+
+
+def _external_plugin_dirs() -> list:
+    """Return plugin directories from CHEETAHCLAWS_PLUGIN_PATH env var."""
+    raw = os.environ.get(PLUGIN_PATH_ENV, "")
+    return [Path(p) for p in raw.split(os.pathsep) if p and Path(p).is_dir()]
+
+
+def _scan_external_plugins() -> list:
+    """Discover plugins from external directories."""
+    from .types import PluginScope, PluginManifest
+    results = []
+    for d in _external_plugin_dirs():
+        for manifest_file in d.glob("*/manifest.json"):
+            import json
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            results.append(PluginEntry(
+                name=data.get("name", manifest_file.parent.name),
+                install_dir=manifest_file.parent,
+                scope=PluginScope.EXTERNAL,
+                source="external",
+                enabled=True,
+                manifest=PluginManifest.from_dict(data),
+            ))
+    return results
+
+
 def list_plugins(scope: PluginScope | None = None) -> list[PluginEntry]:
     """Return all installed plugins (optionally filtered by scope)."""
     entries: list[PluginEntry] = []
@@ -58,6 +87,8 @@ def list_plugins(scope: PluginScope | None = None) -> list[PluginEntry]:
             entry = PluginEntry.from_dict(data)
             entry.manifest = PluginManifest.from_plugin_dir(entry.install_dir)
             entries.append(entry)
+    if scope is None or scope == PluginScope.EXTERNAL:
+        entries.extend(_scan_external_plugins())
     return entries
 
 
@@ -122,7 +153,7 @@ def install_plugin(
 
         # Install pip dependencies
         if manifest.dependencies:
-            dep_ok, dep_msg = _install_dependencies(manifest.dependencies)
+            dep_ok, dep_msg = install_dependencies(manifest.dependencies)
             if not dep_ok:
                 return False, dep_msg
 
@@ -162,7 +193,7 @@ def _clone_plugin(url: str, dest: Path) -> tuple[bool, str]:
     return True, "cloned"
 
 
-def _install_dependencies(deps: list[str]) -> tuple[bool, str]:
+def install_dependencies(deps: list[str]) -> tuple[bool, str]:
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet"] + deps,
         capture_output=True, text=True,
@@ -252,5 +283,5 @@ def update_plugin(name: str, scope: PluginScope | None = None) -> tuple[bool, st
     # Re-install dependencies if manifest changed
     manifest = PluginManifest.from_plugin_dir(entry.install_dir)
     if manifest and manifest.dependencies:
-        _install_dependencies(manifest.dependencies)
+        install_dependencies(manifest.dependencies)
     return True, f"Plugin '{name}' updated. {result.stdout.strip()}"

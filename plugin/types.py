@@ -10,7 +10,8 @@ from typing import Any
 
 class PluginScope(str, Enum):
     USER    = "user"     # ~/.cheetahclaws/plugins/
-    PROJECT = "project"  # .cheetahclaws/plugins/ (cwd)
+    PROJECT = "project"
+    EXTERNAL = "external"  # .cheetahclaws/plugins/ (cwd)
 
 
 @dataclass

@@ -9,6 +9,8 @@ from .loader import (
     load_all_plugins, load_plugin_tools, load_plugin_skills,
     load_plugin_mcp_configs, register_plugin_tools,
 )
+from .store import PLUGIN_PATH_ENV, install_dependencies
+from .loader import check_missing_deps, ensure_plugin_dependencies
 from .recommend import recommend_plugins, recommend_from_files, format_recommendations
 
 __all__ = [
@@ -19,4 +21,8 @@ __all__ = [
     "load_all_plugins", "load_plugin_tools", "load_plugin_skills",
     "load_plugin_mcp_configs", "register_plugin_tools",
     "recommend_plugins", "recommend_from_files", "format_recommendations",
+    "PLUGIN_PATH_ENV",
+    "install_dependencies",
+    "check_missing_deps",
+    "ensure_plugin_dependencies",
 ]
