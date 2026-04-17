@@ -136,3 +136,79 @@ def execute_tool(
 def clear_registry() -> None:
     """Remove all registered tools. Intended for testing."""
     _registry.clear()
+
+
+# ── Tool scheduling support ────────────────────────────────────────────────
+
+import copy as _copy
+import json as _json
+
+_SCHEDULING_PROPS = {
+    "tool_call_alias": {
+        "type": "string",
+        "description": (
+            "Optional alias for this tool call. "
+            "Other tools can reference it in depends_on."
+        ),
+    },
+    "depends_on": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "List of tool_call IDs or aliases that must complete before this tool runs."
+        ),
+    },
+}
+
+
+def _coerce_params(params: dict, schema: dict) -> dict:
+    """Coerce string parameter values to their schema-declared types."""
+    props = schema.get("properties", {})
+    result = {}
+    for key, value in params.items():
+        prop_schema = props.get(key)
+        if prop_schema and isinstance(value, str):
+            ptype = prop_schema.get("type")
+            try:
+                if ptype == "integer":
+                    value = int(value)
+                elif ptype == "number":
+                    value = float(value)
+                elif ptype == "boolean":
+                    value = value.lower() in ("true", "1", "yes")
+                elif ptype in ("array", "object"):
+                    value = _json.loads(value)
+            except (ValueError, _json.JSONDecodeError):
+                pass
+        result[key] = value
+    return result
+
+
+# Wrap get_tool_schemas to inject scheduling properties
+_orig_get_tool_schemas = get_tool_schemas
+
+
+def get_tool_schemas():
+    """Return tool schemas with scheduling properties injected."""
+    schemas = _orig_get_tool_schemas()
+    result = []
+    for s in schemas:
+        s = _copy.deepcopy(s)
+        props = s.setdefault("properties", {})
+        for k, v in _SCHEDULING_PROPS.items():
+            props.setdefault(k, _copy.deepcopy(v))
+        result.append(s)
+    return result
+
+
+# Wrap execute_tool to strip scheduling params and coerce types
+_orig_execute_tool = execute_tool
+
+
+def execute_tool(name, params, *args, **kwargs):
+    """Execute a tool after stripping scheduling params and coercing types."""
+    clean = {k: v for k, v in params.items() if k not in _SCHEDULING_PROPS}
+    tool = get_tool(name)
+    if tool is not None:
+        clean = _coerce_params(clean, tool.schema)
+    return _orig_execute_tool(name, clean, *args, **kwargs)
