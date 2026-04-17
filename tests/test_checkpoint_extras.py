@@ -56,6 +56,7 @@ class TestTokenSnapshotExtendedFields:
         source = STORE_PY.read_text(encoding="utf-8")
         assert '"cache_creation"' in source, "Missing cache_creation field"
 
-    def test_distinct_base_in_source(self):
+    def test_cache_fields_in_source(self):
         source = STORE_PY.read_text(encoding="utf-8")
-        assert '"distinct_base"' in source, "Missing distinct_base field"
+        assert '"cache_read"' in source, "Missing cache_read field"
+        assert '"cache_creation"' in source, "Missing cache_creation field"
