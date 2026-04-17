@@ -1,3 +1,4 @@
+# [desc] Tests for SubAgentManager: spawn, wait, cancel, depth limits, and result extraction [/desc]
 """Tests for the sub-agent system (subagent.py)."""
 import time
 import threading
