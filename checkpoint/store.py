@@ -98,7 +98,7 @@ def track_file_edit(session_id: str, file_path: str) -> str | None:
     except OSError:
         return None
     if size > _MAX_FILE_SIZE:
-        print(f"[checkpoint] skipping large file ({size} bytes): {file_path}")
+        print(f"[checkpoint] skipping large file ({size} bytes): {file_path}", file=sys.stderr)
         return None
 
     # Copy file to backups/
@@ -108,7 +108,7 @@ def track_file_edit(session_id: str, file_path: str) -> str | None:
     try:
         shutil.copy2(str(p), str(backup_path))
     except Exception as e:
-        print(f"[checkpoint] backup failed for {file_path}: {e}")
+        print(f"[checkpoint] backup failed for {file_path}: {e}", file=sys.stderr)
         return None
 
     return backup_name
@@ -183,6 +183,8 @@ def make_snapshot(
         token_snapshot={
             "input": getattr(state, "total_input_tokens", 0),
             "output": getattr(state, "total_output_tokens", 0),
+            "cache_read": getattr(state, "total_cache_read_tokens", 0),
+            "cache_creation": getattr(state, "total_cache_creation_tokens", 0),
         },
         file_backups=new_backups,
     )
