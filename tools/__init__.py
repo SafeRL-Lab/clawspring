@@ -494,8 +494,7 @@ _EXTENSION_MODULES = [
     "multi_agent.tools",
     "skill.tools",
     "cc_mcp.tools",
-    "task.tools",
-]
+    "task.tools",, "plan_mode"]
 
 for _mod_name in _EXTENSION_MODULES:
     try:
