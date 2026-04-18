@@ -183,8 +183,6 @@ def make_snapshot(
         token_snapshot={
             "input": getattr(state, "total_input_tokens", 0),
             "output": getattr(state, "total_output_tokens", 0),
-            "cache_read": getattr(state, "total_cache_read_tokens", 0),
-            "cache_creation": getattr(state, "total_cache_creation_tokens", 0),
         },
         file_backups=new_backups,
     )
