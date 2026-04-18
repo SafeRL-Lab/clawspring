@@ -125,15 +125,16 @@ def run(user_message, state, config, system_prompt,
 3. While True:
    a. Check cancel_check() — cooperative cancellation for sub-agents
    b. maybe_compact(state, config) — compress if near context limit
-   c. Stream from provider → yield TextChunk / ThinkingChunk
-   d. Record assistant message
-   e. If no tool_calls → break
-   f. For each tool_call:
+   c. sanitize_history(state.messages) — enforce tool_calls ↔ tool-response pairing
+   d. Stream from provider → yield TextChunk / ThinkingChunk
+   e. Record assistant message
+   f. If no tool_calls → break
+   g. For each tool_call:
       - Permission check (_check_permission)
       - If denied → yield PermissionRequest → user decides
       - Execute tool → yield ToolStart / ToolEnd
       - Append tool result
-   g. Loop (model sees tool results and responds)
+   h. Loop (model sees tool results and responds)
 ```
 
 **Event types:**
@@ -149,7 +150,8 @@ def run(user_message, state, config, system_prompt,
 
 ### `compaction.py` — Context Window Management
 
-Keeps conversations within model context limits using two layers.
+Keeps conversations within model context limits using two layers, plus a
+history-integrity sanitizer that runs before every API call.
 
 **Layer 1: Snip** (`snip_old_tool_results`)
 - Rule-based, no API cost
@@ -161,10 +163,31 @@ Keeps conversations within model context limits using two layers.
 - Splits messages into [old | recent] at ~70/30 ratio
 - Replaces old messages with a summary + acknowledgment
 
+**Tool-pair-aware splitting** (`_respect_tool_pairs`)
+- `find_split_point` chooses an index by token count, then adjusts it so the
+  split never falls **between** an `assistant(tool_calls)` message and its
+  `tool` response messages.
+- Without this, the recent half would contain orphan `tool` entries which
+  OpenAI-compatible providers (DeepSeek et al.) reject with
+  `"Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"` (HTTP 400).
+- If no safe split exists, returns `0` (skip compaction this turn).
+
+**History sanitizer** (`sanitize_history`)
+- Single-pass O(n) invariant enforcer, returns a new list; does not mutate input.
+- Drops orphan `tool` messages (tool_call_id not in the current assistant's `tool_calls`).
+- Strips unanswered `tool_calls` entries from assistant messages when a non-tool
+  message intervenes; removes the `tool_calls` key entirely if all are stripped.
+- Called from `agent.run()` after `maybe_compact` and before every `stream()`,
+  so any source of inconsistency (compaction artifacts, crashed tool execs,
+  checkpoint restores) is neutralized before it reaches the provider.
+
 **Trigger:** `maybe_compact()` checks `estimate_tokens(messages) > context_limit * 0.7`.
 Runs snip first (cheap), then auto-compact if still over.
 
-**Token estimation:** `len(content) / 3.5` — simple heuristic. Works for most models.
+**Token estimation:** `int((chars / 2.8) + 4 tokens/msg) * 1.1` — chars/2.8 is
+conservative for code-heavy content (plain `/3.5` under-counted and let context
+overflow), plus per-message framing overhead and a 10% buffer. Tool-call `input`
+dicts are counted recursively so nested payloads (e.g. `Write.content`) contribute.
 `get_context_limit(model)` reads from the provider registry.
 
 ### `memory.py` — Persistent Memory
