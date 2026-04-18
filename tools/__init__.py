@@ -333,6 +333,25 @@ TOOL_SCHEMAS = [
             "required": ["seconds"],
         },
     },
+    {
+        "name": "ContextGC",
+        "description": (
+            "Garbage-collect your context to free space. Trash tool results you no longer "
+            "need, keep only relevant snippets from large results, and save key information "
+            "in notes that persist across turns."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "trash":         {"type": "array", "items": {"type": "string"}, "description": "tool_call_ids to fully discard"},
+                "keep_snippets": {"type": "array", "description": "Partial keeps with text anchors"},
+                "notes":         {"type": "array", "description": "Named scratchpad entries: {name, content}"},
+                "trash_notes":   {"type": "array", "items": {"type": "string"}, "description": "Note names to discard"},
+                "compact_xml":   {"type": "boolean", "description": "Strip verbose XML from old assistant outputs"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -479,6 +498,16 @@ def _register_builtins() -> None:
             read_only=False, concurrent_safe=True,
         ),
     ]
+
+    # ContextGC tool
+    from context_gc import process_gc_call
+    _tool_defs.append(ToolDef(
+        name="ContextGC",
+        schema=_schemas["ContextGC"],
+        func=lambda p, c: process_gc_call(p, c),
+        read_only=False, concurrent_safe=False,
+    ))
+
     for td in _tool_defs:
         register_tool(td)
 
