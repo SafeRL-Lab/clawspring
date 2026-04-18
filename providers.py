@@ -467,11 +467,14 @@ class ThinkingChunk:
 
 class AssistantTurn:
     """Completed assistant turn with text + tool_calls."""
-    def __init__(self, text, tool_calls, in_tokens, out_tokens):
-        self.text        = text
-        self.tool_calls  = tool_calls   # list of {id, name, input}
-        self.in_tokens   = in_tokens
-        self.out_tokens  = out_tokens
+    def __init__(self, text, tool_calls, in_tokens, out_tokens,
+                 cache_read_tokens=0, cache_creation_tokens=0):
+        self.text                 = text
+        self.tool_calls           = tool_calls   # list of {id, name, input}
+        self.in_tokens            = in_tokens
+        self.out_tokens           = out_tokens
+        self.cache_read_tokens    = cache_read_tokens
+        self.cache_creation_tokens = cache_creation_tokens
 
 
 def stream_anthropic(
@@ -528,6 +531,8 @@ def stream_anthropic(
             text, tool_calls,
             final.usage.input_tokens,
             final.usage.output_tokens,
+            cache_read_tokens=getattr(final.usage, "cache_read_input_tokens", 0) or 0,
+            cache_creation_tokens=getattr(final.usage, "cache_creation_input_tokens", 0) or 0,
         )
 
 
@@ -584,6 +589,7 @@ def stream_openai_compat(
     text          = ""
     tool_buf: dict = {}   # index → {id, name, args_str}
     in_tok = out_tok = 0
+    cache_read_tok = cache_creation_tok = 0
 
     stream = client.chat.completions.create(**kwargs)
     for chunk in stream:
@@ -592,6 +598,9 @@ def stream_openai_compat(
             if hasattr(chunk, "usage") and chunk.usage:
                 in_tok  = chunk.usage.prompt_tokens
                 out_tok = chunk.usage.completion_tokens
+                _details = getattr(chunk.usage, "prompt_tokens_details", None)
+                if _details:
+                    cache_read_tok = getattr(_details, "cached_tokens", 0) or 0
             continue
 
         choice = chunk.choices[0]
@@ -622,6 +631,9 @@ def stream_openai_compat(
         if hasattr(chunk, "usage") and chunk.usage:
             in_tok  = chunk.usage.prompt_tokens  or in_tok
             out_tok = chunk.usage.completion_tokens or out_tok
+            _details = getattr(chunk.usage, "prompt_tokens_details", None)
+            if _details:
+                cache_read_tok = getattr(_details, "cached_tokens", 0) or cache_read_tok
 
     tool_calls = []
     for idx in sorted(tool_buf):
@@ -635,7 +647,7 @@ def stream_openai_compat(
             tc_entry["extra_content"] = v["extra_content"]
         tool_calls.append(tc_entry)
 
-    yield AssistantTurn(text, tool_calls, in_tok, out_tok)
+    yield AssistantTurn(text, tool_calls, in_tok, out_tok, cache_read_tok, cache_creation_tok)
 
 
 def stream_ollama(
