@@ -89,8 +89,11 @@ def run(
         user_msg["images"] = [pending_img]
     state.messages.append(user_msg)
 
-    # Inject runtime metadata into config so tools (e.g. Agent) can access it
-    config = {**config, "_depth": depth, "_system_prompt": system_prompt}
+    # Inject runtime metadata into config so tools (e.g. Agent, ContextGC) can access it.
+    # ContextGC reads and mutates config["_gc_state"]; without this binding, every call
+    # returns "Error: no GC state available" and no trashed_id is ever recorded.
+    config = {**config, "_depth": depth, "_system_prompt": system_prompt,
+              "_gc_state": state.gc_state}
     session_id = config.get("_session_id", "default")
 
     # Wire up structured logging from config (idempotent, cheap)
