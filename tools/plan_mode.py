@@ -1,97 +1,148 @@
-"""Plan mode tools — EnterPlanMode, WritePlan, ExitPlanMode.
+"""Plan mode tools — EnterPlanMode / ExitPlanMode.
 
-Allows the LLM to enter a read-only planning phase before writing code.
+Extracted from tools/__init__.py so plan-mode logic lives in a single focused
+module rather than scattered inline at the bottom of the tools package.
+
+Model flow
+----------
+1. `EnterPlanMode` is called; a per-session plan file is (re-)created under
+   `<cwd>/.nano_claude/plans/<session_id>.md` with a Markdown header, and
+   `config["permission_mode"]` flips to "plan". In that mode, `Write` is only
+   allowed against the plan file (see agent._check_permission).
+2. The model writes the plan by calling the regular `Write` tool with
+   `file_path=<plan_file>`. No dedicated WritePlan tool — `Write` already
+   exists and the permission gate takes care of scoping.
+3. `ExitPlanMode` reads the plan file, refuses to exit if it is empty /
+   only-header, and restores the previous permission mode. The plan content
+   is embedded in the tool_result so it is visible to the user on approval.
 """
+from __future__ import annotations
+
 from pathlib import Path
 
-from tool_registry import register_tool, ToolDef
 import runtime
+from tool_registry import register_tool, ToolDef
 
 
-def _enter_plan_mode(params: dict, config: dict = None) -> str:
-    config = config or {}
-    ctx = runtime.get_ctx(config)
-    plan_dir = Path.home() / ".cheetahclaws" / "plans"
-    plan_dir.mkdir(parents=True, exist_ok=True)
-    session_id = config.get("session_id", "default")
-    ctx.plan_file = plan_dir / f"{session_id}.md"
-    ctx.prev_permission_mode = config.get("permission_mode")
+def _plan_file_for(config: dict) -> Path:
+    session_id = config.get("_session_id", "default")
+    cwd = Path(config.get("_worktree_cwd") or Path.cwd())
+    plans_dir = cwd / ".nano_claude" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    return plans_dir / f"{session_id}.md"
+
+
+def _enter_plan_mode(params: dict, config: dict) -> str:
+    """Enter plan mode: create plan file, flip permission_mode, remember previous."""
+    if config.get("permission_mode") == "plan":
+        return (
+            "Already in plan mode. Write your plan to the plan file, "
+            "then call ExitPlanMode."
+        )
+
+    plan_path = _plan_file_for(config)
+    if not plan_path.exists() or plan_path.stat().st_size == 0:
+        task_desc = params.get("task_description", "")
+        header = f"# Plan: {task_desc}\n\n" if task_desc else "# Plan\n\n"
+        plan_path.write_text(header, encoding="utf-8")
+
+    sctx = runtime.get_ctx(config)
+    sctx.prev_permission_mode = config.get("permission_mode", "auto")
     config["permission_mode"] = "plan"
-    task_desc = params.get("task_description", "")
-    msg = f"Entered plan mode. Plan file: {ctx.plan_file}"
-    if task_desc:
-        msg += f"\nTask: {task_desc}"
-    msg += "\nOnly the plan file is writable. Use WritePlan to save your plan."
-    return msg
+    sctx.plan_file = str(plan_path)
+
+    return (
+        f"Plan mode activated. Plan file: {plan_path}\n"
+        "Write your step-by-step plan to the plan file, then call ExitPlanMode "
+        "when ready to implement."
+    )
 
 
-def _write_plan(params: dict, config: dict = None) -> str:
-    config = config or {}
-    ctx = runtime.get_ctx(config)
-    if not ctx.plan_file:
-        return "Error: not in plan mode. Call EnterPlanMode first."
-    content = params.get("content", "")
-    if not content.strip():
-        return "Error: plan content is empty."
-    ctx.plan_file.write_text(content, encoding="utf-8")
-    return f"Plan saved to {ctx.plan_file}"
+def _exit_plan_mode(_params: dict, config: dict) -> str:
+    """Exit plan mode: read plan file, reject if empty, restore permissions."""
+    if config.get("permission_mode") != "plan":
+        return "Not in plan mode."
+
+    sctx = runtime.get_ctx(config)
+    plan_file = sctx.plan_file or ""
+    plan_content = _read_plan_content(plan_file)
+
+    if not _plan_has_substance(plan_content):
+        return (
+            "Plan is empty -- please write your step-by-step plan to the plan "
+            f"file ({plan_file}) before exiting plan mode."
+        )
+
+    config["permission_mode"] = sctx.prev_permission_mode or "auto"
+    sctx.prev_permission_mode = None
+    sctx.plan_file = None
+
+    return (
+        "Plan mode exited. Resuming normal permissions.\n\n"
+        f"Plan content:\n{plan_content}\n\n"
+        "Wait for the user to approve the plan before executing any steps."
+    )
 
 
-def _exit_plan_mode(params: dict, config: dict = None) -> str:
-    config = config or {}
-    ctx = runtime.get_ctx(config)
-    if not ctx.plan_file:
-        return "Error: not in plan mode."
-    if not ctx.plan_file.exists():
-        return "Error: plan file not found. Write a plan with WritePlan before exiting."
-    if ctx.plan_file.stat().st_size == 0:
-        return "Error: plan file is empty. Write a plan with WritePlan before exiting."
-    config["permission_mode"] = ctx.prev_permission_mode or "normal"
-    plan_path = ctx.plan_file
-    ctx.plan_file = None
-    ctx.prev_permission_mode = None
-    return f"Exited plan mode. Plan at: {plan_path}\nAwaiting user approval before implementation."
+def _read_plan_content(plan_file: str) -> str:
+    if not plan_file:
+        return ""
+    path = Path(plan_file)
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
 
 
-# --- Schemas ---
+def _plan_has_substance(content: str) -> bool:
+    """Accept the plan only if it has real content beyond a single top-level title.
+
+    A lone `# Title` line counts as empty so the model is forced to actually
+    write steps; `## Section` and below count as real content.
+    """
+    if not content:
+        return False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        is_top_level_title = stripped.startswith("# ") and not stripped.startswith("## ")
+        if not is_top_level_title:
+            return True
+    return False
+
 
 _ENTER_SCHEMA = {
     "name": "EnterPlanMode",
     "description": (
-        "Enter plan mode to analyze the codebase and create an implementation plan "
-        "before writing code. In plan mode, only the plan file is writable."
+        "Switch to plan mode: read-only except for writing the plan file. "
+        "Use this to analyze a task and write a step-by-step plan before executing."
     ),
-    "properties": {
-        "task_description": {
-            "type": "string",
-            "description": "Brief description of the task to plan for",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task_description": {
+                "type": "string",
+                "description": "Brief description of what you plan to do",
+            },
         },
+        "required": [],
     },
-}
-
-_WRITE_SCHEMA = {
-    "name": "WritePlan",
-    "description": "Write the implementation plan as a structured Markdown document.",
-    "properties": {
-        "content": {
-            "type": "string",
-            "description": "The complete implementation plan in Markdown format.",
-        },
-    },
-    "required": ["content"],
 }
 
 _EXIT_SCHEMA = {
     "name": "ExitPlanMode",
     "description": (
-        "Exit plan mode and present the plan for user approval. "
-        "The user must approve the plan before implementation begins."
+        "Exit plan mode and return to normal permissions to begin executing the plan."
     ),
-    "properties": {},
+    "input_schema": {"type": "object", "properties": {}, "required": []},
 }
 
-# --- Self-registration ---
 
-register_tool(ToolDef(name="EnterPlanMode", schema=_ENTER_SCHEMA, func=_enter_plan_mode, read_only=True))
-register_tool(ToolDef(name="WritePlan", schema=_WRITE_SCHEMA, func=_write_plan, read_only=False))
-register_tool(ToolDef(name="ExitPlanMode", schema=_EXIT_SCHEMA, func=_exit_plan_mode, read_only=True))
+register_tool(ToolDef(
+    name="EnterPlanMode", schema=_ENTER_SCHEMA, func=_enter_plan_mode,
+    read_only=True, concurrent_safe=False,
+))
+register_tool(ToolDef(
+    name="ExitPlanMode", schema=_EXIT_SCHEMA, func=_exit_plan_mode,
+    read_only=False, concurrent_safe=False,
+))
