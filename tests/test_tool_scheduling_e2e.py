@@ -15,6 +15,12 @@ from providers import AssistantTurn
 from tool_registry import ToolDef, register_tool
 
 
+@pytest.fixture(autouse=True)
+def _no_quota(monkeypatch):
+    """Disable quota tracking — these tests exercise scheduling, not billing."""
+    monkeypatch.setattr("quota.record_usage", lambda *a, **kw: None)
+
+
 def _scripted_stream(captured_schemas, turns):
     cursor = iter(turns)
 

@@ -1,15 +1,26 @@
 """Tests for tool scheduling (depends_on, tool_call_alias) and ID uniquification."""
+import pytest
+
 from tool_registry import (
     get_tool_schemas,
     execute_tool,
     register_tool,
+    clear_registry,
     ToolDef,
     _SCHEDULING_PROPS,
 )
 from id_uniquify import uniquify_tool_call_ids, _collect_used_ids
 
-# Trigger builtin tool registration
 import tools  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _ensure_builtins():
+    """Guarantee builtins are registered even after another test cleared the registry."""
+    clear_registry()
+    tools._register_builtins()
+    yield
+    clear_registry()
 
 
 class TestSchedulingPropsInjection:
@@ -63,7 +74,10 @@ class TestExecuteToolStripsScheduling:
             schema={
                 "name": "test_sched_tool",
                 "description": "test tool",
-                "properties": {"msg": {"type": "string"}},
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"msg": {"type": "string"}},
+                },
             },
             func=_handler,
             read_only=True,

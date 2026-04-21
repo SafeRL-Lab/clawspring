@@ -193,4 +193,5 @@ _orig_execute_tool = execute_tool
 def execute_tool(name, params, *args, **kwargs):
     """Execute a tool after stripping scheduling params."""
     clean = {k: v for k, v in params.items() if k not in _SCHEDULING_PROPS}
+
     return _orig_execute_tool(name, clean, *args, **kwargs)
