@@ -132,7 +132,7 @@ Other install methods: [pip install](#alternative-install-with-pip) | [uv instal
 ## 🔥🔥🔥 News (Pacific Time)
 
  
-- Apr 18, 2026 (**v3.05.75**): **External plugin discovery via `CHEETAHCLAWS_PLUGIN_PATH` + safer dependency management; tool-history integrity fix for OpenAI-compatible providers (DeepSeek et al.)**
+- Apr 18, 2026 (**v3.05.75**): **External plugin discovery via `CHEETAHCLAWS_PLUGIN_PATH` + safer dependency management; tool-history integrity fix for OpenAI-compatible providers (DeepSeek et al.); end-to-end prompt-cache token tracking across providers with full checkpoint round-trip**
 - Apr 16, 2026 (**v3.05.74**): **Web UI production hardening — persistence, multi-user auth, ops endpoints, JS module split, pytest suite**
   
  

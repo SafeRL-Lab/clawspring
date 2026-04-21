@@ -148,6 +148,15 @@ def run(user_message, state, config, system_prompt,
 | `PermissionRequest` | `description, granted` | Needs user approval |
 | `TurnDone` | `input_tokens, output_tokens` | End of one API turn |
 
+**Session-level token totals** live on `AgentState`, not on the per-turn event:
+
+| Field | Source |
+|---|---|
+| `total_input_tokens` / `total_output_tokens` | Summed from each turn's `in_tokens` / `out_tokens` |
+| `total_cache_read_tokens` / `total_cache_write_tokens` | Summed from each turn's `cache_read_tokens` / `cache_write_tokens` via `getattr(..., 0)`. Anthropic populates both; OpenAI-schema providers populate read-only (their spec has no cache-write counter); Ollama and custom providers default to 0 |
+
+All four totals are persisted into `checkpoint/store.make_snapshot`'s `token_snapshot` dict and restored as a set on `/checkpoint <id>` / `/rewind`, so rewind never leaves the running counters out of sync with the snapshot they were rewound to.
+
 ### `compaction.py` — Context Window Management
 
 Keeps conversations within model context limits using two layers, plus a
