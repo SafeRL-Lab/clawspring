@@ -63,12 +63,14 @@ packages = [
     "voice", "video", "checkpoint",
     "ui", "web", "bridges", "commands",
     "research", "research.sources",
+    "prompts",
     "modular", "modular.video", "modular.voice", "modular.trading",
     "modular.trading.data", "modular.trading.engines", "modular.trading.agents",
 ]
 
 [tool.setuptools.package-data]
 "web" = ["*.js", "*.css", "*.html", "*.ico", "*.png", "static/js/*.js", "static/*.png", "static/*.ico"]
+"prompts" = ["base/*.md", "fragments/*.md", "README.md"]
 "modular.video" = ["PLUGIN.md"]
 "modular.voice" = ["PLUGIN.md"]
 "modular.trading" = ["PLUGIN.md", "skills/*.md", "agent_templates/*.md"]

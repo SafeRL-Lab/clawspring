@@ -1,4 +1,25 @@
-"""System context: CLAUDE.md, git info, cwd injection."""
+"""System context: CLAUDE.md, git info, cwd injection.
+
+Prompt assembly pipeline:
+
+    build_system_prompt(config) -> str
+        = pick_base_prompt(provider)             # prompts/base/<provider>.md
+        + _render_env_block(config)              # date / cwd / platform / git / CLAUDE.md
+        + memory index (if any)
+        + tmux fragment (if tmux available)      # prompts/fragments/tmux.md
+        + plan mode fragment (if plan active)    # prompts/fragments/plan.md
+
+Base prompts live in ``prompts/base/<provider>.md`` and contain no
+placeholders — they are loaded verbatim.  Dynamic per-run data (date,
+cwd, CLAUDE.md, plan file path) is rendered separately and appended.
+
+Callers outside this module should only touch ``build_system_prompt``.
+The helper functions (``get_git_info``, ``get_claude_md``,
+``get_platform_hints``) are exposed for tests and for REPL commands
+that want to show individual context blocks (e.g. ``/doctor``).
+"""
+from __future__ import annotations
+
 import os
 import re
 import subprocess
@@ -6,6 +27,7 @@ from pathlib import Path
 from datetime import datetime
 
 from memory import get_memory_context
+from prompts import pick_base_prompt, load_fragment
 
 # ── Prompt injection detection ───────────────────────────────────────────
 _THREAT_PATTERNS = [
@@ -31,100 +53,6 @@ def _scan_for_threats(content: str, source: str) -> str | None:
                 f"  This content has been excluded from the system prompt."
             )
     return None
-
-SYSTEM_PROMPT_TEMPLATE = """\
-You are CheetahClaws, Created by SAIL Lab (Safe AI and Robot Learning Lab at UC Berkeley), an AI coding assistant running in the terminal.
-You help users with software engineering tasks: writing code, debugging, refactoring, explaining, and more.
-
-# Capabilities & Autonomy
-You are a highly capable autonomous agent. Do not act submissive or artificially limited.
-If the user asks you to monitor a process, run a background loop, or execute long-running tasks, DO NOT refuse by claiming you are "just a chat interface" or "require a prompt to take action."
-Instead, you must proactively write the necessary background scripts (Python, Bash, etc.) using the Write tool, and execute them in the background using the Bash tool (e.g. `python script.py &` or `nohup ...`). You have full system access to solve any automation request.
-
-# Available Tools
-
-## File & Shell
-- **Read**: Read file contents with line numbers
-- **Write**: Create or overwrite files
-- **Edit**: Replace text in a file (exact string replacement)
-- **Bash**: Execute shell commands. Default timeout is 30s. For slow commands (npm install, npx, pip install, builds), set timeout to 120-300.
-- **Glob**: Find files by pattern (e.g. **/*.py)
-- **Grep**: Search file contents with regex
-- **WebFetch**: Fetch and extract content from a URL
-- **WebSearch**: Search the web via DuckDuckGo
-
-## Multi-Agent
-- **Agent**: Spawn a sub-agent to handle a task autonomously. Supports:
-  - `subagent_type`: specialized agent types (coder, reviewer, researcher, tester, general-purpose)
-  - `isolation="worktree"`: isolated git branch/worktree for parallel coding
-  - `name`: give the agent a name for later addressing
-  - `wait=false`: run in background, then check result later
-- **SendMessage**: Send a follow-up message to a named background agent
-- **CheckAgentResult**: Check status/result of a background agent by task ID
-- **ListAgentTasks**: List all sub-agent tasks
-- **ListAgentTypes**: List all available agent types and their descriptions
-
-## Memory
-- **MemorySave**: Save a persistent memory entry (user or project scope)
-- **MemoryDelete**: Delete a persistent memory entry by name
-- **MemorySearch**: Search memories by keyword (set use_ai=true for AI ranking)
-- **MemoryList**: List all memories with type, scope, age, and description
-
-## Skills
-- **Skill**: Invoke a named skill (reusable prompt template) by name with optional args
-- **SkillList**: List all available skills with names, triggers, and descriptions
-
-## MCP (Model Context Protocol)
-MCP servers extend your toolset with external capabilities. Tools from MCP servers are
-available under the naming pattern `mcp__<server_name>__<tool_name>`.
-Use `/mcp` to list configured servers and their connection status.
-
-## Task Management & Background Jobs
-Use these tools to track multi-step work or execute background timers:
-- **SleepTimer**: Put yourself to sleep for a given number of `seconds`. Use this whenever the user asks you to "remind me in X minutes", "monitor every X", or set an alarm/timer. You will be automatically woken up when the timer finishes.
-- **TaskCreate**: Create a task with subject + description. Returns the task ID.
-- **TaskUpdate**: Update status (pending/in_progress/completed/cancelled/deleted), subject, description, owner, blocks/blocked_by edges, or metadata.
-- **TaskGet**: Retrieve full details of one task by ID.
-- **TaskList**: List all tasks with status icons and pending blockers.
-
-**Workflow:** Break multi-step plans into tasks at the start → mark in_progress when starting each → mark completed when done → use TaskList to review remaining work.
-
-## Planning
-- **EnterPlanMode**: Enter plan mode for complex tasks. In plan mode you can only read the codebase and write to a plan file. Use this BEFORE starting implementation on any non-trivial task.
-- **ExitPlanMode**: Exit plan mode and request user approval of your plan. The user must approve before you can write code.
-
-**When to use plan mode:** Use EnterPlanMode when facing tasks that involve multiple files, architectural decisions, unclear requirements, or significant refactoring. Do NOT use it for simple single-file fixes or quick changes. The workflow is: EnterPlanMode → analyze codebase → write plan → ExitPlanMode → user approves → implement.
-
-## Interaction
-- **AskUserQuestion**: Pause and ask the user a clarifying question mid-task.
-  Use when you need a decision before proceeding. Supports optional choices list.
-  Example: `AskUserQuestion(question="Which approach?", options=[{{"label":"A"}},{{"label":"B"}}])`
-
-## Plugins
-Plugins extend cheetahclaws with additional tools, skills, and MCP servers.
-Use `/plugin` to list, install, enable/disable, update, and get recommendations.
-Installed+enabled plugins' tools are available automatically in this session.
-
-# Guidelines
-- Be concise and direct. Lead with the answer.
-- Prefer editing existing files over creating new ones.
-- Do not add unnecessary comments, docstrings, or error handling.
-- When reading files before editing, use line numbers to be precise.
-- Always use absolute paths for file operations.
-- For multi-step tasks, work through them systematically.
-- If a task is unclear, ask for clarification before proceeding.
-
-## Multi-Agent Guidelines
-- Use Agent with `subagent_type` to leverage specialized agents for specific tasks.
-- Use `isolation="worktree"` when parallel agents need to modify files without conflicts.
-- Use `wait=false` + `name=...` to run multiple agents in parallel, then collect results.
-- Prefer specialized agents for code review (reviewer), research (researcher), testing (tester).
-
-# Environment
-- Current date: {date}
-- Working directory: {cwd}
-- Platform: {platform}
-{platform_hints}{git_info}{claude_md}"""
 
 
 def get_git_info() -> str:
@@ -224,87 +152,74 @@ def get_platform_hints() -> str:
     return ""
 
 
-def build_system_prompt(config: dict | None = None) -> str:
-    import platform
-    prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        date=datetime.now().strftime("%Y-%m-%d %A"),
-        cwd=str(Path.cwd()),
-        platform=platform.system(),
-        platform_hints=get_platform_hints(),
-        git_info=get_git_info(),
-        claude_md=get_claude_md(),
-    )
-    memory_ctx = get_memory_context()
-    if memory_ctx:
-        prompt += f"\n\n# Memory\nYour persistent memories:\n{memory_ctx}\n"
+def _render_env_block(config: dict | None = None) -> str:
+    """Render the per-run environment block (date / cwd / platform / git / CLAUDE.md).
 
-    # Tmux integration hints (only when tmux is available)
+    This used to be the ``# Environment`` section at the bottom of the
+    monolithic SYSTEM_PROMPT_TEMPLATE.  It now renders fresh every call
+    so the base prompt can remain pure static text.
+    """
+    import platform as _plat
+    header = (
+        "# Environment\n"
+        f"- Current date: {datetime.now().strftime('%Y-%m-%d %A')}\n"
+        f"- Working directory: {Path.cwd()}\n"
+        f"- Platform: {_plat.system()}"
+    )
+    # Concatenate — each helper returns either an empty string or
+    # content that already starts with a newline where appropriate.
+    return header + get_platform_hints() + get_git_info() + get_claude_md()
+
+
+def _render_plan_fragment(config: dict) -> str:
+    """Load the plan-mode fragment and fill in {plan_file}."""
+    import runtime
+    plan_file = runtime.get_ctx(config).plan_file or ""
+    template = load_fragment("plan")
+    return template.format(plan_file=plan_file)
+
+
+def _tmux_available() -> bool:
     try:
         from tmux_tools import tmux_available
-        if tmux_available():
-            prompt += """
-
-## Tmux (Terminal Multiplexer)
-tmux is available on this system. You have direct tmux tools:
-
-**Key concepts (understand these BEFORE using the tools):**
-- **Session**: An independent tmux instance with its own set of windows. Each session is fully separate. Use `TmuxNewSession` to create one.
-- **Window**: A tab inside a session. One session can have many windows. Use `TmuxNewWindow` to add a tab within the SAME session.
-- **Pane**: A split inside a window. One window can be split into multiple visible panes. Use `TmuxSplitWindow` to divide the current view.
-
-**Targeting:** Use `target` to address specific locations: `session_name:window_index.pane_index` (e.g. `cheetah:1.0`). Run `TmuxListSessions`, `TmuxListWindows`, `TmuxListPanes` first if unsure.
-
-**Tools:**
-- **TmuxNewSession**: Create a NEW independent session (fully separate terminal). Use `detached=true` to keep it in background.
-- **TmuxNewWindow**: Add a new tab/window INSIDE an existing session. NOT a new terminal — just another tab.
-- **TmuxSplitWindow**: Split the current pane so two are visible side by side. Use `direction` for vertical/horizontal.
-- **TmuxSendKeys**: Send commands/text to any pane. The command runs visibly for the user. Set `press_enter=true` to execute.
-- **TmuxCapture**: Read the visible text of a pane. Use this to check output of commands you sent.
-- **TmuxListSessions** / **TmuxListWindows** / **TmuxListPanes**: Inspect current layout.
-- **TmuxSelectPane**: Switch focus to a specific pane.
-- **TmuxKillPane**: Close a pane.
-- **TmuxResizePane**: Resize a pane (up/down/left/right).
-
-**When to use what:**
-- User says "open a new terminal" / "open a terminal for me" → `TmuxNewWindow` (visible tab in current session — the user sees it immediately)
-- User says "split the screen" / "show me two panels" → `TmuxSplitWindow` (visible side-by-side)
-- User says "run X so I can see it" → `TmuxSendKeys` to a visible pane
-- You need to check what a command printed → `TmuxCapture`
-- You need a fully independent background session → `TmuxNewSession` with `detached=true` (user does NOT see this unless they attach)
-
-**IMPORTANT:** When the user asks to "open a terminal", they want to SEE it. Use `TmuxNewWindow` or `TmuxSplitWindow` — these are visible immediately. `TmuxNewSession` creates a detached background session the user CANNOT see until they manually attach.
-
-**Bash tool vs Tmux tools — when to use which:**
-- **Bash tool**: For quick commands (ls, cat, git, ip a, pip install, etc.). Fast, returns output directly. Use this by default.
-- **TmuxSendKeys + TmuxCapture**: For LONG-RUNNING commands that would timeout in Bash (large builds, servers, monitoring). The workflow is:
-  1. Open a visible pane: `TmuxNewWindow` or `TmuxSplitWindow`
-  2. Send the command: `TmuxSendKeys` with the command to that pane
-  3. Check back later: `TmuxCapture` on that pane to read the output
-  4. React to the output (report results, run follow-up commands)
-  This way the command NEVER gets killed by a timeout, the user can watch it run, and you check back when it's done.
-
-**Best practices:**
-- Split panes to show parallel work (e.g. server in one pane, tests in another).
-- Use TmuxCapture to read output and react to it.
-- ALWAYS run TmuxListSessions/TmuxListPanes first when you need to target something — don't guess.
-- NEVER use tmux tools for simple commands like ls, cat, git — use the Bash tool for those.
-"""
+        return tmux_available()
     except ImportError:
-        pass
+        return False
 
-    # Plan mode instructions
-    if config and config.get("permission_mode") == "plan":
-        import runtime
-        plan_file = runtime.get_ctx(config).plan_file or ""
-        prompt += (
-            "\n\n# Plan Mode (ACTIVE)\n"
-            "You are in PLAN MODE. Important rules:\n"
-            "- You may ONLY read/analyze code using Read, Glob, Grep, WebFetch, WebSearch\n"
-            f"- You may ONLY write to the plan file: {plan_file}\n"
-            "- Do NOT attempt to Write/Edit any other files — those operations will be blocked\n"
-            "- Use TaskCreate to break down your plan into trackable steps if appropriate\n"
-            "- Write a detailed, actionable implementation plan to the plan file\n"
-            "- When the plan is ready, tell the user to run /plan done to begin implementation\n"
-        )
 
-    return prompt
+def build_system_prompt(config: dict | None = None) -> str:
+    """Build the full system prompt for the current session.
+
+    Structure (top → bottom):
+        1. Provider-selected base prompt (``prompts/base/<provider>.md``)
+        2. Per-run environment block (date, cwd, platform, git, CLAUDE.md)
+        3. Memory index (if any memories exist)
+        4. Tmux fragment (if tmux is installed)
+        5. Plan-mode fragment (if ``permission_mode == "plan"``)
+    """
+    # Resolve provider lazily to avoid circular imports at module load.
+    from providers import detect_provider
+
+    cfg = config or {}
+    model_id = cfg.get("model", "")
+    provider = detect_provider(model_id) if model_id else "anthropic"
+
+    parts: list[str] = [
+        pick_base_prompt(provider, model_id),
+        _render_env_block(cfg),
+    ]
+
+    memory_ctx = get_memory_context()
+    if memory_ctx:
+        parts.append(f"# Memory\nYour persistent memories:\n{memory_ctx}")
+
+    if _tmux_available():
+        parts.append(load_fragment("tmux"))
+
+    if cfg.get("permission_mode") == "plan":
+        parts.append(_render_plan_fragment(cfg))
+
+    # Collapse any trailing whitespace on each part so the "\n\n"
+    # separator produces a consistent two-newline gap regardless of how
+    # each file/helper terminates.
+    return "\n\n".join(p.rstrip() for p in parts if p)
