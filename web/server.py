@@ -16,7 +16,10 @@ import hashlib
 import hmac
 import json
 import os
-import pty
+try:
+    import pty
+except ImportError:
+    pty = None
 import secrets
 import select
 import shutil
@@ -98,6 +101,8 @@ class _PtySession:
     """A PTY session shared between SSE stream and POST input."""
 
     def __init__(self):
+        if not pty:
+            raise RuntimeError("PTY is not supported on this platform")
         self.master_fd, slave_fd = pty.openpty()
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
@@ -660,6 +665,14 @@ def _handle_websocket(sock: socket.socket, extra: bytes,
                 pass
             return
 
+    try:
+        import pty
+    except ImportError:
+        pty = None
+    if not pty:
+        _send_http(bsock._sock, "501 Not Implemented", "application/json",
+                   b'{"error":"PTY not supported on Windows"}')
+        return
     master_fd, slave_fd = pty.openpty()
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"

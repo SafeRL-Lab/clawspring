@@ -23,12 +23,16 @@ class TestIterSkillFiles:
         assert result[0].name == "skill.md"
 
     def test_nested_SKILL_uppercase(self, tmp_path):
+        import platform
         d = tmp_path / "my-skill"
         d.mkdir()
         (d / "SKILL.md").write_text("# My Skill")
         result = list(_iter_skill_files(tmp_path))
         assert len(result) == 1
-        assert result[0].name == "SKILL.md"
+        if platform.system() == "Windows":
+            assert result[0].name.lower() == "skill.md"
+        else:
+            assert result[0].name == "SKILL.md"
 
     def test_mixed_flat_and_nested(self, tmp_path):
         (tmp_path / "flat.md").write_text("# Flat")

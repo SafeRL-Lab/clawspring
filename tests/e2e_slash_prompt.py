@@ -7,12 +7,17 @@ spinning up the full CheetahClaws REPL. Gated on prompt_toolkit availability.
 from __future__ import annotations
 
 import os
-import pty
-import select
 import sys
 import time
+import platform
 
 import pytest
+
+if platform.system() == "Windows":
+    pytest.skip("PTY/termios tests are not supported on Windows", allow_module_level=True)
+
+import pty
+import select
 
 from ui.input import HAS_PROMPT_TOOLKIT
 
