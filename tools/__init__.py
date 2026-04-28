@@ -41,8 +41,8 @@ from tools.diagnostics import (  # noqa: F401
 from tools.interaction import (  # noqa: F401
     _tg_thread_local, _wx_thread_local, _slack_thread_local,
     _is_in_tg_turn, _is_in_wx_turn, _is_in_slack_turn, _is_in_web_turn,
-    _ask_user_question, ask_input_interactive, drain_pending_questions,
-    _sleeptimer, _pending_questions, _ask_lock, _INPUT_WAIT_TIMEOUT,
+    _ask_user_question, ask_input_interactive,
+    _sleeptimer, _INPUT_WAIT_TIMEOUT,
 )
 
 from tool_registry import ToolDef, register_tool
@@ -591,6 +591,7 @@ def _register_builtins() -> None:
             schema=_schemas["AskUserQuestion"],
             func=lambda p, c: _ask_user_question(
                 p["question"], p.get("options"), p.get("allow_freetext", True),
+                config=c,
             ),
             read_only=True, concurrent_safe=False,
         ),

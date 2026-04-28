@@ -916,10 +916,6 @@ def repl(config: dict, initial_prompt: str = None):
                         if ans_content:
                             _tg_send(ttok, tchat, ans_content)
 
-        # Drain any AskUserQuestion prompts raised during this turn
-        from tools import drain_pending_questions
-        drain_pending_questions(config)
-
         # ── Auto-snapshot after each turn ──
         try:
             tracked = ckpt.get_tracked_edits()

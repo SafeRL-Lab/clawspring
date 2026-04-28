@@ -37,10 +37,7 @@ def _is_in_web_turn(config: dict) -> bool:
     return bool(getattr(runtime.get_ctx(config), 'in_web_turn', False))
 
 
-# ── AskUserQuestion state ─────────────────────────────────────────────────
-
-_pending_questions: list[dict] = []
-_ask_lock = threading.Lock()
+# ── AskUserQuestion ───────────────────────────────────────────────────────
 
 _INPUT_WAIT_TIMEOUT = 300  # seconds before a remote input request times out
 
@@ -49,25 +46,54 @@ def _ask_user_question(
     question: str,
     options: list[dict] | None = None,
     allow_freetext: bool = True,
+    config: dict | None = None,
 ) -> str:
-    """Block the agent loop and surface a question to the user in the terminal."""
-    event         = threading.Event()
-    result_holder: list[str] = []
-    entry = {
-        "question":     question,
-        "options":      options or [],
-        "allow_freetext": allow_freetext,
-        "event":        event,
-        "result":       result_holder,
-    }
-    with _ask_lock:
-        _pending_questions.append(entry)
+    """Render a question to the user and synchronously return their answer.
 
-    event.wait(timeout=300)
+    Runs in the agent thread that invoked the tool: prints the question,
+    then delegates to ``ask_input_interactive`` so terminal/Telegram/WeChat/
+    Slack/Web bridges all read input through their normal path.
+    """
+    config = config or {}
+    options = options or []
 
-    if result_holder:
-        return result_holder[0]
-    return "(no answer — timeout)"
+    print()
+    print("\033[1;35m❓ Question from assistant:\033[0m")
+    print(f"   {question}")
+
+    if options:
+        print()
+        for i, opt in enumerate(options, 1):
+            label = opt.get("label", "")
+            desc  = opt.get("description", "")
+            line  = f"  [{i}] {label}"
+            if desc:
+                line += f" — {desc}"
+            print(line)
+        if allow_freetext:
+            print("  [0] Type a custom answer")
+        print()
+
+        while True:
+            raw = ask_input_interactive(
+                "Your choice (number or text): ", config
+            ).strip()
+            if not raw:
+                return ""
+            if raw.isdigit():
+                idx = int(raw)
+                if 1 <= idx <= len(options):
+                    return options[idx - 1].get("label", "")
+                if idx == 0 and allow_freetext:
+                    return ask_input_interactive("Your answer: ", config).strip()
+                print(f"Invalid option: {idx}")
+                continue
+            if allow_freetext:
+                return raw
+            print("Please choose a number from the list.")
+
+    print()
+    return ask_input_interactive("Your answer: ", config).strip()
 
 
 # ── ask_input_interactive (bridge routing) ────────────────────────────────
@@ -160,71 +186,6 @@ def ask_input_interactive(prompt: str, config: dict,
     except (KeyboardInterrupt, EOFError):
         print()
         return ""
-
-
-# ── drain_pending_questions ───────────────────────────────────────────────
-
-def drain_pending_questions(config: dict) -> bool:
-    """Render any pending AskUserQuestion calls and collect user answers."""
-    with _ask_lock:
-        pending = list(_pending_questions)
-        _pending_questions.clear()
-
-    if not pending:
-        return False
-
-    for entry in pending:
-        question = entry["question"]
-        options  = entry["options"]
-        allow_ft = entry["allow_freetext"]
-        event    = entry["event"]
-        result   = entry["result"]
-
-        print()
-        print("\033[1;35m❓ Question from assistant:\033[0m")
-        print(f"   {question}")
-
-        if options:
-            print()
-            for i, opt in enumerate(options, 1):
-                label = opt.get("label", "")
-                desc  = opt.get("description", "")
-                line  = f"  [{i}] {label}"
-                if desc:
-                    line += f" — {desc}"
-                print(line)
-            if allow_ft:
-                print("  [0] Type a custom answer")
-            print()
-
-            while True:
-                raw = ask_input_interactive(
-                    "Your choice (number or text): ", config
-                ).strip()
-                if not raw:
-                    break
-                if raw.isdigit():
-                    idx = int(raw)
-                    if 1 <= idx <= len(options):
-                        raw = options[idx - 1]["label"]
-                        break
-                    elif idx == 0 and allow_ft:
-                        raw = ask_input_interactive("Your answer: ", config).strip()
-                        break
-                    else:
-                        print(f"Invalid option: {idx}")
-                        raw = ""
-                        continue
-                elif allow_ft:
-                    break
-        else:
-            print()
-            raw = ask_input_interactive("Your answer: ", config).strip()
-
-        result.append(raw)
-        event.set()
-
-    return True
 
 
 # ── SleepTimer ────────────────────────────────────────────────────────────

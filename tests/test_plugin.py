@@ -284,64 +284,37 @@ class TestPluginRecommend:
 # ── AskUserQuestion (via tools module) ────────────────────────────────────────
 
 class TestAskUserQuestion:
-    def test_drain_empty(self):
-        """drain_pending_questions returns False when nothing pending."""
-        from tools import drain_pending_questions, _pending_questions
-        _pending_questions.clear()
-        assert drain_pending_questions({}) is False
-
-    def test_roundtrip_with_freetext(self):
-        """Submit a question, simulate user typing 'yes', collect result."""
+    def test_freetext_answer(self):
+        """User typing free text returns that text verbatim."""
         import tools as _tools
 
-        _tools._pending_questions.clear()
-
-        answered = threading.Event()
-
-        def _submit():
-            result = _tools._ask_user_question("Continue?", allow_freetext=True)
-            assert result == "yes"
-            answered.set()
-
-        t = threading.Thread(target=_submit, daemon=True)
-        t.start()
-
-        import time; time.sleep(0.05)  # let _submit block on event
-
-        # Simulate REPL drain with user input "yes"
         with patch("builtins.input", return_value="yes"):
-            _tools.drain_pending_questions({})
+            result = _tools._ask_user_question("Continue?", allow_freetext=True)
+        assert result == "yes"
 
-        answered.wait(timeout=2)
-        assert answered.is_set()
-
-    def test_roundtrip_with_option_selection(self):
-        """Select option 1 from a numbered list."""
+    def test_option_selection_by_number(self):
+        """Selecting option 1 from a numbered list returns its label."""
         import tools as _tools
-        _tools._pending_questions.clear()
 
-        answered = threading.Event()
-        result_box = []
-
-        def _submit():
-            r = _tools._ask_user_question(
+        with patch("builtins.input", return_value="1"):
+            result = _tools._ask_user_question(
                 "Which?",
                 options=[{"label": "Alpha"}, {"label": "Beta"}],
                 allow_freetext=False,
             )
-            result_box.append(r)
-            answered.set()
+        assert result == "Alpha"
 
-        t = threading.Thread(target=_submit, daemon=True)
-        t.start()
+    def test_option_freetext_via_zero(self):
+        """Typing 0 with allow_freetext prompts for a custom answer."""
+        import tools as _tools
 
-        import time; time.sleep(0.05)
-
-        with patch("builtins.input", return_value="1"):
-            _tools.drain_pending_questions({})
-
-        answered.wait(timeout=2)
-        assert result_box == ["Alpha"]
+        with patch("builtins.input", side_effect=["0", "custom reply"]):
+            result = _tools._ask_user_question(
+                "Pick:",
+                options=[{"label": "Alpha"}],
+                allow_freetext=True,
+            )
+        assert result == "custom reply"
 
     def test_tool_schema_registered(self):
         """AskUserQuestion must appear in TOOL_SCHEMAS."""
