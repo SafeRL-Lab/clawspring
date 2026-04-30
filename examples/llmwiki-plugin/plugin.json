@@ -1,0 +1,10 @@
+{
+  "name": "llmwiki",
+  "version": "0.1.0",
+  "description": "Persistent memory management via llmwiki-py (read/write/search/append a local wiki)",
+  "author": "openclaude",
+  "tags": ["memory", "wiki", "knowledge-base"],
+  "tools": ["tools"],
+  "dependencies": [],
+  "homepage": "https://github.com/yamaceay/llmwiki-py"
+}
