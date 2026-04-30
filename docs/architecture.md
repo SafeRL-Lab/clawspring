@@ -656,6 +656,10 @@ Per-iteration behavior:
 This is the closest thing the project has to a "7 × 24 agent"
 runtime today; see CONTRIBUTING.md for the current production-
 readiness gaps (daemon mode, SQLite session store, cost guardrails).
+The daemon-mode work is tracked in [issue #68](https://github.com/SafeRL-Lab/cheetahclaws/issues/68);
+the IPC / permission-routing / local-auth contract is captured in
+[RFC 0001](RFC/0001-daemon-design-note.md) and validated end-to-end by
+the `cc_daemon/` reference scaffolding ([spike notes](RFC/0001-spike-notes.md)).
 
 ### Modular ecosystem (`modular/`)
 

@@ -1493,6 +1493,12 @@ def repl(config: dict, initial_prompt: str = None):
 # ── Entry point ────────────────────────────────────────────────────────────
 
 def main():
+    # Subcommand short-circuit: avoid colliding with the positional `prompt`
+    # parser. `cheetahclaws spike-daemon ...` dispatches into daemon.cli.
+    if len(sys.argv) >= 2 and sys.argv[1] == "spike-daemon":
+        from cc_daemon.cli import main as _daemon_main
+        sys.exit(_daemon_main(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(
         prog="cheetahclaws",
         description="CheetahClaws — minimal Python Claude Code implementation",
