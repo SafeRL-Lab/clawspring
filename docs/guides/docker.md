@@ -133,6 +133,27 @@ If this fails, your Ollama is bound to localhost only. Set `OLLAMA_HOST=0.0.0.0:
 
 **Telegram bridge not responding** — check `docker compose logs cheetahclaws | grep -i telegram`. Token/chat-id are loaded from `~/.cheetahclaws/config.json` (i.e., `./data/config.json` on the host). Validate they're set, then restart the container.
 
+**Chat UI loads but every JS/CSS asset is 404** (`/marked.min.js`, `/static/js/chat.js`, …) — the running server is reading static files from a `web/` directory that doesn't actually contain them. This almost always means a custom Dockerfile used a non-editable install (`pip install .[all]`) without bundling package data, so `web/` in `site-packages/` is missing the `static/js/` subtree. Two ways out:
+
+- Easiest: use this repo's `Dockerfile` + `docker-compose.yml` unchanged. It uses `pip install -e '.[web]'`, which keeps `web/` pointed at the source tree.
+- Or, in your custom Dockerfile, switch to editable install:
+  ```dockerfile
+  RUN pip install --no-cache-dir -e '.[all]'
+  ```
+  Editable install leaves `web/server.py` next to its `static/` directory, so the asset paths resolve correctly regardless of how setuptools handled package-data.
+
+If you must do a non-editable install, make sure your build is using `setuptools >= 62` and that `pyproject.toml`'s `[tool.setuptools.package-data]` for `web` includes `static/**/*` (it does, on `main`). Older setuptools or stale build caches can silently drop subdirectory data.
+
+## Custom Dockerfile pitfalls
+
+If you're rolling your own image instead of the one in this repo, keep these in mind:
+
+- **Use editable install (`pip install -e '.[web]'`).** The chat UI's static files (`web/static/js/*.js`) are package data, not Python code. Editable install removes any dependency on package-data correctly making it into the wheel — `web/server.py` is read directly from the source tree.
+- **Don't `WORKDIR` away before `pip install`.** The install must run with the project's `pyproject.toml` at the build context root so setuptools can resolve `[tool.setuptools.package-data]`.
+- **`COPY` the full source tree, not just `pyproject.toml` + a few `.py` files.** The chat UI ships HTML/JS/CSS that lives outside the Python source — leaving them out is the most common reason `/chat` loads but assets 404.
+- **Match Python ≥ 3.10.** The server uses `Path.is_relative_to`, `match`/`case`, and other 3.10+ features.
+- **Run `cheetahclaws --web --host 0.0.0.0`.** Without `--host 0.0.0.0` the server only binds to `127.0.0.1` inside the container, which Docker's port mapping cannot reach from the host.
+
 ## Security notes
 
 - The Web UI ships with **first-visit-creates-admin** auth. Don't run with `--no-auth` outside `127.0.0.1`.
