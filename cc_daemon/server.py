@@ -46,9 +46,13 @@ class DaemonState:
         token: Optional[str],
         expected_uid: Optional[int],
         audit_enabled: bool,
+        unauthenticated_metrics: bool = False,
+        config: Optional[dict] = None,
     ) -> None:
         self.transport = transport
         self.data_dir = data_dir
+        self.unauthenticated_metrics = unauthenticated_metrics
+        self.config = config or {}
         self.audit = AuditLog(data_dir / "logs" / "auth.jsonl", enabled=audit_enabled)
         self.gate = AuthGate(
             transport,
@@ -61,6 +65,8 @@ class DaemonState:
         self.permissions.start_janitor()
         self.rpc = RpcRegistry()
         register_methods(self.rpc, self.permissions)
+        from . import system_methods
+        system_methods.register(self.rpc, self)
         self.shutdown_event = threading.Event()
 
     def shutdown(self) -> None:
@@ -88,12 +94,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        if path == "/healthz":
-            self._send_json(200, {"status": "ok"})
+        is_health_path = path in ("/healthz", "/readyz", "/metrics")
+
+        # Health endpoints can opt out of auth (Prometheus scrapers, etc.).
+        if is_health_path and self.state.unauthenticated_metrics:
+            self._serve_health(path)
             return
-        if path == "/readyz":
-            self._send_json(200, {"status": "ready"})
-            return
+
         try:
             auth = self._authenticate()
         except RateLimited:
@@ -102,6 +109,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         except Unauthenticated:
             self._send_error(401, "unauthenticated")
             return
+
+        if is_health_path:
+            # Auth passed; skip the API-version gate so a monitoring tool
+            # that doesn't speak our protocol can still scrape.
+            self._serve_health(path)
+            return
+
         if not self._check_api_version():
             return
         client_id = self._resolve_client_id(auth)
@@ -109,6 +123,19 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             self._handle_events(client_id)
             return
         self._send_error(404, "not found")
+
+    # ── Health helpers ────────────────────────────────────────────────────
+
+    def _serve_health(self, path: str) -> None:
+        try:
+            import health as _health
+            payload = _health.payload_for(path, self.state.config)
+        except Exception:
+            payload = {"status": "ok"}
+        code = 200
+        if path == "/readyz" and payload.get("status") == "degraded":
+            code = 503
+        self._send_json(code, payload)
 
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
@@ -284,29 +311,35 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_state: DaemonState  # set after construction
 
 
-class ThreadedUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    daemon_threads = True
-    request_queue_size = 256
-    daemon_state: DaemonState
+# UnixStreamServer is unavailable on Windows; build the subclass only where
+# socketserver exposes it.  Code paths that try to construct one on Windows
+# raise from the helpers below instead.
+ThreadedUnixServer = None  # type: ignore[assignment]
+if hasattr(socketserver, "UnixStreamServer"):
+    class ThreadedUnixServer(socketserver.ThreadingMixIn,                    # type: ignore[no-redef]
+                              socketserver.UnixStreamServer):
+        daemon_threads = True
+        request_queue_size = 256
+        daemon_state: DaemonState
 
-    # BaseHTTPRequestHandler reads `client_address` to fill log entries; for
-    # Unix sockets `accept()` returns ("", None). Synthesize a stable repr.
-    def get_request(self):
-        sock, _ = self.socket.accept()
-        return sock, ("unix-socket", 0)
+        # BaseHTTPRequestHandler reads `client_address` to fill log entries; for
+        # Unix sockets `accept()` returns ("", None). Synthesize a stable repr.
+        def get_request(self):
+            sock, _ = self.socket.accept()
+            return sock, ("unix-socket", 0)
 
-    def server_bind(self):
-        # Remove leftover socket file from a prior crash, then bind.
-        path = self.server_address
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-        # Ensure parent dir is 0700 before bind.
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(Path(path).parent, 0o700)
-        super().server_bind()
-        os.chmod(path, 0o600)
+        def server_bind(self):
+            # Remove leftover socket file from a prior crash, then bind.
+            path = self.server_address
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            # Ensure parent dir is 0700 before bind.
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(Path(path).parent, 0o700)
+            super().server_bind()
+            os.chmod(path, 0o600)
 
 
 # ── Construction helpers ─────────────────────────────────────────────────────
@@ -319,6 +352,8 @@ def make_tcp_server(
     data_dir: Path,
     token: str,
     audit_enabled: bool = True,
+    unauthenticated_metrics: bool = False,
+    config: Optional[dict] = None,
 ) -> ThreadedTCPServer:
     server = ThreadedTCPServer((host, port), DaemonRequestHandler)
     server.daemon_state = DaemonState(
@@ -327,6 +362,8 @@ def make_tcp_server(
         token=token,
         expected_uid=None,
         audit_enabled=audit_enabled,
+        unauthenticated_metrics=unauthenticated_metrics,
+        config=config,
     )
     return server
 
@@ -337,7 +374,14 @@ def make_unix_server(
     data_dir: Path,
     expected_uid: Optional[int] = None,
     audit_enabled: bool = True,
-) -> ThreadedUnixServer:
+    unauthenticated_metrics: bool = False,
+    config: Optional[dict] = None,
+):
+    if ThreadedUnixServer is None:
+        raise RuntimeError(
+            "Unix-socket transport is unavailable on this platform "
+            "(socketserver.UnixStreamServer missing); use TCP loopback instead."
+        )
     server = ThreadedUnixServer(str(socket_path), DaemonRequestHandler)
     if expected_uid is None:
         expected_uid = os.geteuid()
@@ -347,5 +391,7 @@ def make_unix_server(
         token=None,
         expected_uid=expected_uid,
         audit_enabled=audit_enabled,
+        unauthenticated_metrics=unauthenticated_metrics,
+        config=config,
     )
     return server

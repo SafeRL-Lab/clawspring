@@ -1,23 +1,38 @@
-"""cli.py — `cheetahclaws spike-daemon` subcommand.
+"""cli.py — `cheetahclaws serve` entry point.
 
-Subcommands:
-  serve [--listen unix|tcp://...]   Start the daemon. Default unix socket.
-  status                             Print daemon status / pidfile.
-  stop                               Send SIGTERM to the running daemon.
-  rotate-token                       Regenerate the TCP bearer token.
+The interactive daemon-control verbs (`cheetahclaws daemon status / stop /
+logs / rotate-token`) live in :mod:`commands.daemon_cmd`; this module is
+just the long-running serve loop.
+
+Layered on top of the spike's `make_tcp_server` / `make_unix_server`
+constructors, with these additions for the foundation:
+
+* Calls :func:`bootstrap.bootstrap` so logging / tool registry are wired
+  up the same way as the REPL.
+* Pins ``log_file`` to ``<data_dir>/logs/daemon.log`` (overridable via
+  user config) so ``cheetahclaws daemon logs`` has signal to tail.
+* Threads the loaded ``config`` and ``unauthenticated_metrics`` flag
+  through ``DaemonState`` so ``/healthz`` / ``/readyz`` / ``/metrics``
+  return real ``health.py`` payloads.
+* Writes ``~/.cheetahclaws/daemon.json`` (discovery) on bind and removes
+  it on exit, in addition to the spike's pid file.
+* Watches ``DaemonState.shutdown_event`` so ``system.shutdown`` over RPC
+  triggers graceful exit cross-platform (Windows can't deliver SIGTERM
+  cleanly to another Python process).
 """
 from __future__ import annotations
 
 import argparse
 import os
 import signal
-import socket
 import sys
-import time
+import threading
 from pathlib import Path
 from typing import Optional
 
-from .auth import load_or_create_token, rotate_token
+from . import discovery
+from .auth import load_or_create_token
+
 
 DEFAULT_DATA_DIR = Path.home() / ".cheetahclaws"
 DEFAULT_RUN_DIR = DEFAULT_DATA_DIR / "run"
@@ -26,83 +41,171 @@ DEFAULT_TOKEN_PATH = DEFAULT_DATA_DIR / "daemon_token"
 DEFAULT_PID_FILE = DEFAULT_RUN_DIR / "daemon.pid"
 
 
-def _parse_listen(spec: str) -> tuple[str, object]:
-    """Return ('unix', Path) or ('tcp', (host, port))."""
+# ── --listen parsing ───────────────────────────────────────────────────────
+
+def parse_listen(spec: str) -> tuple[str, object]:
+    """Return ``("unix", Path)`` or ``("tcp", (host, port))``."""
     if spec.startswith("unix://"):
         return "unix", Path(spec[len("unix://"):]).expanduser()
     if spec.startswith("tcp://"):
         host_port = spec[len("tcp://"):]
         if ":" not in host_port:
             raise ValueError(f"tcp listen must be tcp://host:port, got {spec!r}")
-        host, port = host_port.rsplit(":", 1)
-        return "tcp", (host, int(port))
-    raise ValueError(f"unknown listen spec {spec!r}; use unix://path or tcp://host:port")
+        host, port_s = host_port.rsplit(":", 1)
+        if not host:
+            raise ValueError(f"tcp listen host empty: {spec!r}")
+        try:
+            port = int(port_s)
+        except ValueError as exc:
+            raise ValueError(f"tcp listen port not int: {spec!r}") from exc
+        if not (0 <= port <= 65535):
+            raise ValueError(f"tcp listen port out of range: {spec!r}")
+        return "tcp", (host, port)
+    raise ValueError(
+        f"unknown listen spec {spec!r}; use unix://path or tcp://host:port"
+    )
 
 
-def _write_pidfile(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()))
+# ── argparse for `cheetahclaws serve` ─────────────────────────────────────
+
+def _build_serve_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="cheetahclaws serve",
+        description="Run the headless cheetahclaws daemon.",
+    )
+    p.add_argument("--listen", default=None,
+                   help=f"unix://path or tcp://host:port "
+                        f"(default unix://{DEFAULT_UNIX_SOCKET})")
+    p.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR),
+                   help="Directory for token / pid / discovery / audit files.")
+    p.add_argument("--token-path", default=str(DEFAULT_TOKEN_PATH),
+                   help="TCP bearer-token file path (TCP transport only).")
+    p.add_argument("--no-audit", action="store_true",
+                   help="Disable audit log (default: on for both transports).")
+    p.add_argument("--print-token", action="store_true",
+                   help="Print the TCP bearer token to stdout (TCP only).")
+    p.add_argument("--unauthenticated-metrics", action="store_true",
+                   help="Serve /healthz, /readyz, /metrics without auth "
+                        "(off by default; opt-in for Prometheus scrapers).")
+    return p
 
 
-def _read_pidfile(path: Path) -> Optional[int]:
-    if not path.exists():
-        return None
-    try:
-        return int(path.read_text().strip())
-    except Exception:
-        return None
+def serve_main(argv: Optional[list[str]] = None) -> int:
+    """Entry point used by ``cheetahclaws serve`` (dispatched from cheetahclaws.py)."""
+    parser = _build_serve_parser()
+    args = parser.parse_args(argv)
+    return cmd_serve(args)
 
 
-def _is_pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
+# ── The actual daemon loop ────────────────────────────────────────────────
 
 def cmd_serve(args: argparse.Namespace) -> int:
     from .server import make_tcp_server, make_unix_server
 
     listen = args.listen or f"unix://{DEFAULT_UNIX_SOCKET}"
-    transport, addr = _parse_listen(listen)
+    try:
+        transport, addr = parse_listen(listen)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if transport == "unix" and os.name == "nt":
+        print("error: Unix sockets unavailable on Windows; "
+              "use --listen tcp://host:port instead.", file=sys.stderr)
+        return 2
+
     data_dir = Path(args.data_dir).expanduser()
-    pid_file = DEFAULT_PID_FILE if args.data_dir == str(DEFAULT_DATA_DIR) else data_dir / "run" / "daemon.pid"
+    pid_file = (DEFAULT_PID_FILE if args.data_dir == str(DEFAULT_DATA_DIR)
+                else data_dir / "run" / "daemon.pid")
 
     existing = _read_pidfile(pid_file)
-    if existing and _is_pid_alive(existing):
+    if existing and discovery.pid_alive(existing):
         print(f"daemon already running (pid={existing})", file=sys.stderr)
         return 1
 
+    # ── Load config + bootstrap (logging, tool registry) ──────────────────
+    from cc_config import load_config
+    from bootstrap import bootstrap as _bootstrap
+    config = load_config()
+    if not config.get("log_file"):
+        log_dir = data_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        config["log_file"] = str(log_dir / "daemon.log")
+    # Bump default log level so `daemon logs` has signal in serve mode.
+    if config.get("log_level", "warn") == "warn":
+        config["log_level"] = "info"
+    _bootstrap(config)
+
+    # Pin the health.py module-level config so default-arg payload helpers
+    # see the model name on every call.
+    import health as _health
+    _health.install_config(config)
+
     audit_enabled = not args.no_audit
     if transport == "unix":
-        server = make_unix_server(addr, data_dir=data_dir, audit_enabled=audit_enabled)
+        server = make_unix_server(
+            addr, data_dir=data_dir,
+            audit_enabled=audit_enabled,
+            unauthenticated_metrics=args.unauthenticated_metrics,
+            config=config,
+        )
         listen_repr = f"unix://{addr}"
+        actual_address = str(addr)
     else:
         token = load_or_create_token(Path(args.token_path).expanduser())
-        host, port = addr  # type: ignore
-        server = make_tcp_server(host, port, data_dir=data_dir, token=token, audit_enabled=audit_enabled)
-        listen_repr = f"tcp://{host}:{port}"
+        host, port = addr  # type: ignore[misc]
+        server = make_tcp_server(
+            host, port, data_dir=data_dir, token=token,
+            audit_enabled=audit_enabled,
+            unauthenticated_metrics=args.unauthenticated_metrics,
+            config=config,
+        )
+        # If port=0 was passed, capture the actual kernel-chosen port.
+        actual_port = server.server_address[1]
+        listen_repr = f"tcp://{host}:{actual_port}"
+        actual_address = f"{host}:{actual_port}"
         if args.print_token:
             print(f"token: {token}")
 
     _write_pidfile(pid_file)
-    print(f"cheetahclaws-daemon listening on {listen_repr} (pid={os.getpid()})")
+
+    # Discovery file — REPL/Web/bridge clients look here to find us.
+    info = discovery.make_info(
+        pid=os.getpid(), transport=transport,
+        address=actual_address, version=_lookup_version(),
+    )
+    try:
+        discovery.write(info)
+    except OSError as exc:
+        print(f"warning: discovery write failed: {exc}", file=sys.stderr)
+
+    print(f"cheetahclaws daemon listening on {listen_repr} (pid={os.getpid()})")
     if audit_enabled:
         print(f"audit log: {data_dir / 'logs' / 'auth.jsonl'}")
 
-    def _shutdown(_signo, _frame):
-        print("shutdown requested", file=sys.stderr)
-        server.daemon_state.shutdown()
-        # ThreadingMixIn server.shutdown() must be called from a different
-        # thread than the one running serve_forever. We're in a signal
-        # handler, which runs on the main thread (the same one in
-        # serve_forever) — schedule shutdown on a side thread.
-        import threading as _t
-        _t.Thread(target=server.shutdown, daemon=True).start()
+    # Graceful-shutdown watcher: when DaemonState.shutdown_event fires
+    # (set by system.shutdown RPC or the signal handler below), trigger
+    # server.shutdown() from a side thread (the spike's invariant: the
+    # same thread as serve_forever cannot call shutdown).
+    def _watch_shutdown():
+        server.daemon_state.shutdown_event.wait()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+    threading.Thread(target=_watch_shutdown,
+                      daemon=True, name="daemon-shutdown-watch").start()
 
-    signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGINT, _shutdown)
+    def _signal_shutdown(_signo, _frame):
+        server.daemon_state.shutdown()
+
+    try:
+        signal.signal(signal.SIGTERM, _signal_shutdown)
+        signal.signal(signal.SIGINT, _signal_shutdown)
+        if hasattr(signal, "SIGBREAK"):
+            try:
+                signal.signal(signal.SIGBREAK, _signal_shutdown)  # type: ignore[arg-type]
+            except (ValueError, OSError):
+                pass
+    except (ValueError, OSError):
+        pass
 
     try:
         server.serve_forever(poll_interval=0.5)
@@ -120,76 +223,78 @@ def cmd_serve(args: argparse.Namespace) -> int:
             pid_file.unlink()
         except FileNotFoundError:
             pass
+        try:
+            discovery.clear()
+        except OSError:
+            pass
     return 0
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    pid = _read_pidfile(DEFAULT_PID_FILE)
-    if pid and _is_pid_alive(pid):
-        print(f"running (pid={pid})")
-        return 0
-    print("not running")
-    return 1
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _read_pidfile(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text().strip())
+    except Exception:
+        return None
 
 
-def cmd_stop(args: argparse.Namespace) -> int:
-    pid = _read_pidfile(DEFAULT_PID_FILE)
-    if not pid or not _is_pid_alive(pid):
-        print("not running", file=sys.stderr)
-        return 1
-    os.kill(pid, signal.SIGTERM)
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
-        if not _is_pid_alive(pid):
-            print(f"stopped (pid={pid})")
-            return 0
-        time.sleep(0.1)
-    print(f"timed out waiting for pid {pid}; sending SIGKILL", file=sys.stderr)
-    os.kill(pid, signal.SIGKILL)
-    return 0
+def _write_pidfile(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()))
 
 
-def cmd_rotate_token(args: argparse.Namespace) -> int:
-    token = rotate_token(Path(args.token_path).expanduser())
-    print(f"new token written to {args.token_path}")
-    if args.print_token:
-        print(f"token: {token}")
-    return 0
+def _lookup_version() -> str:
+    try:
+        import cheetahclaws as _root
+        return getattr(_root, "VERSION", "unknown")
+    except Exception:
+        return "unknown"
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="cheetahclaws spike-daemon")
-    sp = p.add_subparsers(dest="cmd", required=True)
-
-    s = sp.add_parser("serve", help="Start the daemon")
-    s.add_argument("--listen", default=None,
-                   help=f"unix://path or tcp://host:port (default unix://{DEFAULT_UNIX_SOCKET})")
-    s.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
-    s.add_argument("--token-path", default=str(DEFAULT_TOKEN_PATH))
-    s.add_argument("--no-audit", action="store_true",
-                   help="Disable audit log (default: on for both transports per RFC review)")
-    s.add_argument("--print-token", action="store_true",
-                   help="Print the TCP bearer token to stdout (TCP only)")
-    s.set_defaults(func=cmd_serve)
-
-    st = sp.add_parser("status", help="Print daemon status")
-    st.set_defaults(func=cmd_status)
-
-    stop = sp.add_parser("stop", help="Stop the running daemon")
-    stop.set_defaults(func=cmd_stop)
-
-    rt = sp.add_parser("rotate-token", help="Regenerate TCP bearer token")
-    rt.add_argument("--token-path", default=str(DEFAULT_TOKEN_PATH))
-    rt.add_argument("--print-token", action="store_true")
-    rt.set_defaults(func=cmd_rotate_token)
-
-    return p
-
+# ── Backward-compat entry: `python -m cc_daemon.cli` ──────────────────────
+#
+# The Cheetahclaws spike branch (RFC 0001-spike-notes.md §"How to run it")
+# documented a subparser CLI with verbs ``serve``, ``status``, ``stop``,
+# and ``rotate-token``.  Foundation moves the canonical surface to
+# ``cheetahclaws serve`` / ``cheetahclaws daemon <action>``, but anyone
+# following the spike notes should still be able to invoke
+# ``python -m cc_daemon.cli ...``.
+#
+# We handle that here by dispatching:
+#   * ``serve``  → the same :func:`serve_main` used by ``cheetahclaws serve``
+#   * ``status`` / ``stop`` / ``logs`` / ``rotate-token``
+#                → :func:`commands.daemon_cmd.dispatch` (the same code path
+#                  used by ``cheetahclaws daemon <action>``)
+#
+# Output / exit codes match the new surface; a few flags from the old
+# spike CLI (``--token-path`` / ``--print-token`` on rotate-token) are
+# silently accepted as a courtesy and ignored.
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return args.func(args)
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if not argv:
+        print(
+            "usage: python -m cc_daemon.cli {serve|status|stop|logs|rotate-token} [options]",
+            file=sys.stderr,
+        )
+        return 2
+
+    cmd = argv[0]
+    if cmd == "serve":
+        return serve_main(argv[1:])
+
+    if cmd in ("status", "stop", "logs", "rotate-token"):
+        # daemon_cmd.dispatch reads cmd from argv[0]
+        from commands.daemon_cmd import dispatch as _daemon_dispatch
+        return _daemon_dispatch(argv)
+
+    print(f"unknown subcommand: {cmd}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

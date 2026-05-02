@@ -1494,10 +1494,23 @@ def repl(config: dict, initial_prompt: str = None):
 
 def main():
     # Subcommand short-circuit: avoid colliding with the positional `prompt`
-    # parser. `cheetahclaws spike-daemon ...` dispatches into daemon.cli.
+    # parser.  `cheetahclaws serve` runs the daemon; `cheetahclaws daemon
+    # <action>` is the daemon-control verb (status / stop / logs /
+    # rotate-token).  See docs/RFC/0001-daemon-design-note.md and
+    # docs/RFC/0002-daemon-foundation-roadmap.md.
+    if len(sys.argv) >= 2 and sys.argv[1] == "serve":
+        from cc_daemon.cli import serve_main as _serve_main
+        sys.exit(_serve_main(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "daemon":
+        from commands.daemon_cmd import dispatch as _daemon_dispatch
+        sys.exit(_daemon_dispatch(sys.argv[2:]))
+    # Backward-compat alias for the spike's `cheetahclaws spike-daemon ...`
+    # surface (referenced in docs/RFC/0001-spike-notes.md).  Routes through
+    # the same paths as `serve` / `daemon <action>` so spike-notes commands
+    # keep working unchanged.
     if len(sys.argv) >= 2 and sys.argv[1] == "spike-daemon":
-        from cc_daemon.cli import main as _daemon_main
-        sys.exit(_daemon_main(sys.argv[2:]))
+        from cc_daemon.cli import main as _legacy_main
+        sys.exit(_legacy_main(sys.argv[2:]))
 
     parser = argparse.ArgumentParser(
         prog="cheetahclaws",

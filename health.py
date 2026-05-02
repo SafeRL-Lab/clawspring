@@ -58,69 +58,110 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
 
     # ── Payload builders ──────────────────────────────────────────────────
-
-    @staticmethod
-    def _uptime() -> float:
-        return round(time.monotonic() - _start_time, 1)
-
-    @staticmethod
-    def _circuit_states() -> dict[str, str]:
-        try:
-            from circuit_breaker import _registry as _cb_reg, _registry_lock as _cb_lock
-            with _cb_lock:
-                return {p: b.state.value for p, b in _cb_reg.items()}
-        except Exception:
-            return {}
-
-    @staticmethod
-    def _active_sessions() -> int:
-        try:
-            from runtime import _registry as _rt_reg, _registry_lock as _rt_lock
-            with _rt_lock:
-                return len(_rt_reg)
-        except Exception:
-            return 0
+    # The instance methods below delegate to module-level functions so that
+    # other listeners (e.g. daemon/server.py) can reuse the same payload
+    # logic without booting a second http.server.
 
     def _healthz(self) -> dict:
-        return {
-            "status":          "ok",
-            "uptime_s":        self._uptime(),
-            "model":           _config.get("model", ""),
-            "active_sessions": self._active_sessions(),
-        }
+        return healthz_payload(_config)
 
     def _readyz(self) -> dict:
-        circuits = self._circuit_states()
-        open_circuits = [p for p, s in circuits.items() if s == "open"]
-        status = "degraded" if open_circuits else "ok"
-        body = {
-            "status":        status,
-            "uptime_s":      self._uptime(),
-            "circuits":      circuits,
-        }
-        if open_circuits:
-            body["open_circuits"] = open_circuits
-        return body
+        return readyz_payload(_config)
 
     def _metrics(self) -> dict:
-        circuits = self._circuit_states()
-        # Today's quota usage (read from file — best effort)
-        daily_tokens = daily_cost = 0
-        try:
-            from quota import _load_daily, _lock as _q_lock
-            with _q_lock:
-                daily_tokens, daily_cost = _load_daily()
-        except Exception:
-            pass
+        return metrics_payload(_config)
 
-        return {
-            "uptime_s":        self._uptime(),
-            "model":           _config.get("model", ""),
-            "active_sessions": self._active_sessions(),
-            "circuits":        circuits,
-            "daily_tokens":    daily_tokens,
-            "daily_cost_usd":  round(daily_cost, 6),
-        }
+
+# ── Module-level payload helpers ──────────────────────────────────────────
+
+def uptime_seconds() -> float:
+    return round(time.monotonic() - _start_time, 1)
+
+
+def _circuit_states() -> dict[str, str]:
+    try:
+        from circuit_breaker import _registry as _cb_reg, _registry_lock as _cb_lock
+        with _cb_lock:
+            return {p: b.state.value for p, b in _cb_reg.items()}
+    except Exception:
+        return {}
+
+
+def _active_sessions() -> int:
+    try:
+        from runtime import _registry as _rt_reg, _registry_lock as _rt_lock
+        with _rt_lock:
+            return len(_rt_reg)
+    except Exception:
+        return 0
+
+
+def healthz_payload(config: dict | None = None) -> dict:
+    cfg = config if config is not None else _config
+    return {
+        "status":          "ok",
+        "uptime_s":        uptime_seconds(),
+        "model":           (cfg or {}).get("model", ""),
+        "active_sessions": _active_sessions(),
+    }
+
+
+def readyz_payload(config: dict | None = None) -> dict:
+    cfg = config if config is not None else _config
+    circuits = _circuit_states()
+    open_circuits = [p for p, s in circuits.items() if s == "open"]
+    status = "degraded" if open_circuits else "ok"
+    body: dict = {
+        "status":   status,
+        "uptime_s": uptime_seconds(),
+        "circuits": circuits,
+    }
+    if open_circuits:
+        body["open_circuits"] = open_circuits
+    body["model"] = (cfg or {}).get("model", "")
+    return body
+
+
+def metrics_payload(config: dict | None = None) -> dict:
+    cfg = config if config is not None else _config
+    circuits = _circuit_states()
+    # Today's quota usage (read from file — best effort)
+    daily_tokens = daily_cost = 0
+    try:
+        from quota import _load_daily, _lock as _q_lock
+        with _q_lock:
+            daily_tokens, daily_cost = _load_daily()
+    except Exception:
+        pass
+    return {
+        "uptime_s":        uptime_seconds(),
+        "model":           (cfg or {}).get("model", ""),
+        "active_sessions": _active_sessions(),
+        "circuits":        circuits,
+        "daily_tokens":    daily_tokens,
+        "daily_cost_usd":  round(daily_cost, 6),
+    }
+
+
+def payload_for(path: str, config: dict | None = None) -> dict:
+    """Dispatch helper: route an HTTP path to its payload builder."""
+    if path == "/healthz":
+        return healthz_payload(config)
+    if path == "/readyz":
+        return readyz_payload(config)
+    if path == "/metrics":
+        return metrics_payload(config)
+    return {}
+
+
+def install_config(config: dict) -> None:
+    """Pin the module-level config used by start_health_server / server.
+
+    Idempotent — daemon/cli.py calls this when starting the daemon listener
+    so the default-arg payload helpers see the right model/version data.
+    """
+    global _config
+    _config = config
 
 
 # ── Server lifecycle ──────────────────────────────────────────────────────
