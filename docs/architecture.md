@@ -684,7 +684,122 @@ Optional self-hosted browser-accessible UI, enabled by `[web]` extra
 (`sqlalchemy`, `passlib[bcrypt]`, `PyJWT`).  `web/server.py` runs an
 HTTP server; `web/static/` serves an xterm.js frontend; `web/db.py`
 persists per-user session history in SQLite.  Launched by `/web` slash
-command inside the REPL, or by `cheetahclaws --serve` (TBD).
+command inside the REPL.
+
+The web UI will eventually become a client of the daemon described in
+the next section (per [RFC 0001](RFC/0001-daemon-design-note.md));
+today it stands alone.
+
+### Daemon (`cc_daemon/` + `commands/daemon_cmd.py`)
+
+The headless `cheetahclaws serve` runtime — foundation for the
+"long-running services survive REPL exit" work tracked in
+[issue #68](https://github.com/SafeRL-Lab/cheetahclaws/issues/68).
+Designed in [RFC 0001](RFC/0001-daemon-design-note.md);
+implementation phasing in
+[RFC 0002](RFC/0002-daemon-foundation-roadmap.md).
+Reference scaffolding lives at
+[RFC 0001 spike notes](RFC/0001-spike-notes.md) — the F-1 foundation
+adopts that scaffolding wholesale and layers the integration glue on
+top.
+
+**Module map (foundation = spike + glue).**
+
+Pulled in unchanged from the spike (these encode the wire contract):
+
+- `cc_daemon/__init__.py` — `API_VERSION = "0"`, `API_VERSION_HEADER =
+  "Cheetahclaws-Api-Version"`.
+- `cc_daemon/server.py` — `ThreadedTCPServer` and `ThreadedUnixServer`
+  (the latter conditional on `socketserver.UnixStreamServer`, so
+  Windows skips it cleanly), 256-deep listen backlog, per-connection
+  request handler, SSE loop with 15 s heartbeat, `Cheetahclaws-Api-Version`
+  gate that returns `426` on mismatch.
+- `cc_daemon/auth.py` — `SO_PEERCRED` peer-cred check (Linux; macOS
+  TODO), bearer-token auth for TCP, per-peer brute-force throttle,
+  audit-log default-on for both transports.
+- `cc_daemon/originator.py` — `client_id` mint / persist
+  (`~/.cheetahclaws/clients/<kind>.id`) / resume so disconnect-and-
+  reconnect keeps the originator identity stable.
+- `cc_daemon/rpc.py` — JSON-RPC 2.0 dispatcher.  Application errors
+  `-32001` (`not_originator`) and `-32002` (`unknown_request`) carry
+  HTTP `403` so observers can't answer permission requests they don't
+  own.
+- `cc_daemon/events.py` — in-memory ring buffer + per-subscriber Queue;
+  emits a `gap` event on overflow so SSE clients know to re-sync.  F-2
+  swaps the ring for the `daemon_events` SQLite table without changing
+  the channel API.
+- `cc_daemon/permission.py` — pending-request store, originator-only
+  `answer`, 30 min default interactive timeout + `permission.refresh_timeout`
+  RPC.
+- `cc_daemon/methods.py` — spike's `echo.ping` / `permission.demo` /
+  `permission.answer` / `permission.refresh_timeout` / `permission.list`.
+- `cc_daemon/spike_client.py` — stdlib smoke client, useful for manual
+  debugging; not a runtime dependency.
+
+Added by the F-1 foundation:
+
+- `cc_daemon/discovery.py` — atomic write/read of
+  `~/.cheetahclaws/daemon.json` (pid, transport, address, started_at,
+  schema version) so REPL / Web / bridge clients can locate the daemon.
+  Auto-clears stale files when the recorded pid is no longer alive.
+- `cc_daemon/system_methods.py` — registers `system.ping` (RFC contract
+  name; coexists with spike's `echo.ping`) and `system.shutdown`
+  (triggers `DaemonState.shutdown_event`, our cross-platform graceful
+  exit since Windows can't deliver SIGTERM cleanly to another Python
+  process).
+- `cc_daemon/cli.py` — rewritten `serve_main(argv)` that calls
+  `bootstrap()`, pins `log_file` to `<data_dir>/logs/daemon.log`,
+  threads loaded config + `--unauthenticated-metrics` through
+  `DaemonState`, writes the discovery file on bind, watches the
+  shutdown event, and clears discovery on exit.
+- `commands/daemon_cmd.py` — `cheetahclaws daemon {status, stop, logs,
+  rotate-token}`.  All actions read the discovery file.  `stop` prefers
+  the `system.shutdown` RPC and falls back to SIGTERM /
+  TerminateProcess.  Sends the `Cheetahclaws-Api-Version: 0` header on
+  every RPC.
+- `health.py` — refactored: extracted `healthz_payload(config)` /
+  `readyz_payload(config)` / `metrics_payload(config)` /
+  `payload_for(path, config)` module-level helpers so both the existing
+  standalone health HTTP server and `cc_daemon/server.py` reuse the
+  same circuit-breaker / quota / runtime-registry probes without
+  starting a second listener.
+
+**Wire surface (HTTP/1.1 over UDS or TCP).**
+
+| Verb + path | Purpose |
+|---|---|
+| `POST /rpc` | JSON-RPC 2.0 — methods, batches, notifications.  Requires `Cheetahclaws-Api-Version: 0`. |
+| `GET /events?since=<id>` | SSE event stream (heartbeats every 15 s; `gap` event on backlog overflow). |
+| `GET /healthz` `/readyz` `/metrics` | Real `health.py` payloads, auth-gated by default; `--unauthenticated-metrics` opts out for trusted scrapers. |
+
+**Auth.** Single-user, single-host threat model — see RFC 0001 §3.
+Unix socket relies on file mode `0600` + `SO_PEERCRED`.  TCP requires
+`Authorization: Bearer <token>` against `~/.cheetahclaws/daemon_token`
+(mode `0600`, generated lazily on first `serve --listen tcp://...`).
+Both transports have audit log default-on; per-peer brute-force
+throttle returns `429` after sustained bad attempts.
+
+**Lifecycle.**
+- `cheetahclaws serve [--listen unix://path | tcp://host:port]
+  [--unauthenticated-metrics] [--no-audit] [--print-token]`
+- `cheetahclaws daemon status` — pid, transport, address, uptime,
+  ping check.
+- `cheetahclaws daemon stop` — graceful via RPC, OS signal as fallback.
+- `cheetahclaws daemon logs [-n N]` — tail
+  `~/.cheetahclaws/logs/daemon.log` (the `serve` entrypoint pins
+  `log_file` to that path when not overridden in config).
+- `cheetahclaws daemon rotate-token` — regenerate token; existing TCP
+  clients receive `401` until they re-read the file.
+
+**What's not in F-1 (intentional).**  The daemon currently exposes
+`system.ping`, `system.shutdown`, the spike's `echo.ping`, and the
+permission methods (which work end-to-end against the spike's demo
+flow but aren't yet wired into `agent.run`).  Migrating
+`monitor/scheduler`, `agent_runner` (as subprocess-per-agent),
+`proactive`, the three messaging bridges, and replacing
+`cc_daemon/methods.py` and `cc_daemon/permission.py` with
+`agent.run`-driven equivalents is the F-2 through F-8 work in the
+foundation roadmap.
 
 ---
 
