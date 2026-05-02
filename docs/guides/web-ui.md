@@ -315,6 +315,14 @@ The `ccjwt` cookie is missing or expired. Refresh the page; the Chat UI will pop
 **I changed a JS file but the browser shows the old version**
 Normal reload now works (we send `Cache-Control: no-cache, must-revalidate` + weak ETag). If it's really stuck, `Ctrl+Shift+R` / `Cmd+Shift+R` forces a bypass.
 
+**`/chat` loads but every JS/CSS asset is 404** (`/marked.min.js`, `/static/js/chat.js`, …)
+Two known causes:
+
+1. **Non-editable install missing package data.** The chat UI's static files live in `web/static/js/` as setuptools package-data. If you installed CheetahClaws non-editable (`pip install .` or `pip install cheetahclaws`) with an old `setuptools` (< 62) or a stale build cache, the `web/static/` subtree may not have been copied into `site-packages/web/`. Reinstall editable (`pip install -e '.[web]'`) or upgrade build tooling (`pip install -U pip setuptools build` then reinstall).
+2. **Install path contains a hidden directory** (e.g. `~/.venv/`, `~/.local/`). Older versions of `web/server.py` rejected any served file whose absolute path contained a dot-prefixed segment, even when that segment was in the install prefix and not the requested file. Fixed on `main` — the dotfile guard now only inspects path segments inside the `web/` package itself.
+
+If you're hitting this in Docker specifically, see [docs/guides/docker.md](docker.md#custom-dockerfile-pitfalls) for the Dockerfile-specific variant.
+
 **Lost my admin password**
 Blow away the SQLite DB and re-register: `rm ~/.cheetahclaws/web.db` then restart. You'll lose all chat history — for real recovery, open the DB with any SQLite client and rewrite the `password_hash` (`bcrypt.hashpw(b"newpass", bcrypt.gensalt()).decode()`).
 

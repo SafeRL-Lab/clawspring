@@ -36,7 +36,28 @@ from typing import Optional
 # ── Config ───────────────────────────────────────────────────────────────
 
 DEFAULT_PORT = 8080
-_WEB_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_web_dir() -> Path:
+    """Locate the directory containing chat.html, marked.min.js, static/, etc.
+
+    Prefer ``importlib.resources.files("web")`` so the package's data files are
+    found whichever way the package was installed (editable, non-editable wheel,
+    zipapp, PEX). Fall back to ``Path(__file__).parent`` for unusual layouts
+    where the resource API can't return a real filesystem path.
+    """
+    try:
+        from importlib.resources import files as _resource_files
+        candidate = Path(str(_resource_files("web")))
+        if candidate.is_dir():
+            return candidate.resolve()
+    except (ImportError, ModuleNotFoundError, TypeError,
+            NotADirectoryError, FileNotFoundError):
+        pass
+    return Path(__file__).resolve().parent
+
+
+_WEB_DIR = _resolve_web_dir()
 
 _server_password: Optional[str] = None   # terminal (/) auth only
 _server_no_auth = False
@@ -1572,13 +1593,21 @@ def _handle_connection(sock: socket.socket, addr: tuple) -> None:
             fname = path.lstrip("/")
             fpath = _WEB_DIR / fname
             # Allow subdirectories (e.g. static/js/*.js) but guard against
-            # path traversal: resolved target must stay inside _WEB_DIR.
+            # path traversal: resolved target must stay inside _WEB_DIR, and
+            # any segment WITHIN that subtree must not be a dotfile. Checking
+            # only the relative parts avoids false-positives when the install
+            # path itself contains a hidden component (e.g. /.venv/, /.local/).
+            rel_parts: tuple[str, ...] = ()
             try:
-                safe = fpath.resolve().is_relative_to(_WEB_DIR.resolve())
+                resolved = fpath.resolve()
+                web_root = _WEB_DIR.resolve()
+                safe = resolved.is_relative_to(web_root)
+                if safe:
+                    rel_parts = resolved.relative_to(web_root).parts
             except (OSError, ValueError):
                 safe = False
             if (safe and fpath.is_file()
-                    and not any(seg.startswith(".") for seg in fpath.parts)):
+                    and not any(seg.startswith(".") for seg in rel_parts)):
                 body = fpath.read_bytes()
                 ctype = _MIME.get(fpath.suffix, "application/octet-stream")
                 # Revalidate app code (JS/CSS/HTML) on every load so edits

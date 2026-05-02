@@ -69,7 +69,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"web" = ["*.js", "*.css", "*.html", "*.ico", "*.png", "static/js/*.js", "static/*.png", "static/*.ico"]
+"web" = ["*.js", "*.css", "*.html", "*.ico", "*.png", "static/**/*"]
 "prompts" = ["base/*.md", "overlays/*.md", "fragments/*.md", "README.md"]
 "modular.video" = ["PLUGIN.md"]
 "modular.voice" = ["PLUGIN.md"]
