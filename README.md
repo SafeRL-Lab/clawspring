@@ -998,6 +998,7 @@ Detailed guides have been moved to [`docs/guides/`](docs/guides/) to keep this R
 | [**Advanced**](docs/guides/advanced.md) | Brainstorm, SSJ Developer Mode, Tmux, Proactive monitoring, Checkpoints, Plan mode, Session management, Cloud sync |
 | [**Recipes**](docs/guides/recipes.md) | 12 step-by-step examples: code review, Telegram remote control, autonomous research, bug fix, brainstorm, session search, browse web pages, email, PDF/Excel analysis, and more |
 | [**Plugin Authoring**](docs/guides/plugin-authoring.md) | Build your own plugin: tools, commands, skills, MCP servers, publishing checklist |
+| [**llmwiki Memory Plugin**](docs/guides/llmwiki.md) | Persistent memory via llmwiki-py: install, configure, update, and use WikiRead/Write/Search/Append |
 | [**Example Plugin**](examples/example-plugin/) | Copy-and-edit starter template with working tools, commands, and skills |
 | [**Contributing**](CONTRIBUTING.md) | Project structure, architecture guide, PR checklist |
 

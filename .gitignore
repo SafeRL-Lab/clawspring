@@ -6,3 +6,5 @@ dist/
 debug_payload.json
 brainstorm_outputs/
 reference/
+.env
+.llmwiki.yaml

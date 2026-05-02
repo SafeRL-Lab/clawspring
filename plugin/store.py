@@ -170,7 +170,7 @@ def install_plugin(
     try:
         if source is None:
             # No source → treat name as a local path if it exists, else error
-            local = Path(name)
+            local = Path(name).expanduser()
             if local.exists() and local.is_dir():
                 source = str(local.resolve())
             else:
@@ -188,7 +188,7 @@ def install_plugin(
             if not ok:
                 return False, msg
         else:
-            local_src = Path(source)
+            local_src = Path(source).expanduser()
             if not local_src.exists():
                 return False, f"Local path not found: {source}"
             shutil.copytree(str(local_src), str(plugin_dir))
