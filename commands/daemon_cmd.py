@@ -39,6 +39,17 @@ def _default_token_path() -> Path:
     return DEFAULT_TOKEN_PATH
 
 
+def _resolve_token_path(info: Optional[dict]) -> Path:
+    """Prefer the token path the daemon recorded in discovery (set when
+    `serve --token-path` overrode the default); fall back to the default
+    location otherwise."""
+    if info is not None:
+        recorded = info.get("token_path")
+        if isinstance(recorded, str) and recorded:
+            return Path(recorded).expanduser()
+    return _default_token_path()
+
+
 # ── Top-level dispatch ─────────────────────────────────────────────────────
 
 def dispatch(argv: list[str]) -> int:
@@ -145,10 +156,10 @@ def _logs(argv: list[str]) -> int:
 # ── rotate-token ───────────────────────────────────────────────────────────
 
 def _rotate_token(argv: list[str]) -> int:
-    token_path = _default_token_path()
+    info = _discovery.locate()
+    token_path = _resolve_token_path(info)
     _auth.rotate_token(token_path)
     print(f"cheetahclaws: rotated token at {token_path}")
-    info = _discovery.locate()
     if info and info.get("transport") == "tcp":
         print("note: existing TCP clients will receive 401 on next request "
               "until they re-read the token file.")
@@ -182,7 +193,7 @@ def _call_rpc(method: str, params: Any = None) -> Tuple[bool, Any]:
                API_VERSION_HEADER: API_VERSION}
 
     if transport == "tcp":
-        token = _auth.load_or_create_token(_default_token_path())
+        token = _auth.load_or_create_token(_resolve_token_path(info))
         headers["Authorization"] = f"Bearer {token}"
         return _post_tcp(address, "/rpc", body, headers)
     if transport == "unix":

@@ -142,6 +142,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     _health.install_config(config)
 
     audit_enabled = not args.no_audit
+    token_path_for_discovery: Optional[str] = None
     if transport == "unix":
         server = make_unix_server(
             addr, data_dir=data_dir,
@@ -152,7 +153,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         listen_repr = f"unix://{addr}"
         actual_address = str(addr)
     else:
-        token = load_or_create_token(Path(args.token_path).expanduser())
+        token_file = Path(args.token_path).expanduser()
+        token = load_or_create_token(token_file)
         host, port = addr  # type: ignore[misc]
         server = make_tcp_server(
             host, port, data_dir=data_dir, token=token,
@@ -164,8 +166,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         actual_port = server.server_address[1]
         listen_repr = f"tcp://{host}:{actual_port}"
         actual_address = f"{host}:{actual_port}"
+        # Record token_path in discovery only when --token-path overrides
+        # the default; daemon-control verbs use it to load the right token.
+        if token_file.resolve() != DEFAULT_TOKEN_PATH.resolve():
+            token_path_for_discovery = str(token_file)
         if args.print_token:
-            print(f"token: {token}")
+            print(f"token: {token}", flush=True)
 
     _write_pidfile(pid_file)
 
@@ -173,15 +179,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     info = discovery.make_info(
         pid=os.getpid(), transport=transport,
         address=actual_address, version=_lookup_version(),
+        token_path=token_path_for_discovery,
     )
     try:
         discovery.write(info)
     except OSError as exc:
-        print(f"warning: discovery write failed: {exc}", file=sys.stderr)
+        print(f"warning: discovery write failed: {exc}", file=sys.stderr, flush=True)
 
-    print(f"cheetahclaws daemon listening on {listen_repr} (pid={os.getpid()})")
+    print(f"cheetahclaws daemon listening on {listen_repr} (pid={os.getpid()})", flush=True)
     if audit_enabled:
-        print(f"audit log: {data_dir / 'logs' / 'auth.jsonl'}")
+        print(f"audit log: {data_dir / 'logs' / 'auth.jsonl'}", flush=True)
 
     # Graceful-shutdown watcher: when DaemonState.shutdown_event fires
     # (set by system.shutdown RPC or the signal handler below), trigger
@@ -273,16 +280,30 @@ def _lookup_version() -> str:
 # spike CLI (``--token-path`` / ``--print-token`` on rotate-token) are
 # silently accepted as a courtesy and ignored.
 
+_USAGE = (
+    "usage: python -m cc_daemon.cli {serve|status|stop|logs|rotate-token} [options]\n"
+    "\n"
+    "Subcommands:\n"
+    "  serve         Run the headless daemon. See `serve --help` for flags.\n"
+    "  status        Print pid / transport / address / uptime / ping outcome.\n"
+    "  stop          Graceful shutdown via system.shutdown RPC + signal fallback.\n"
+    "  logs [-n N]   Tail ~/.cheetahclaws/logs/daemon.log.\n"
+    "  rotate-token  Regenerate the TCP bearer token.\n"
+)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
-    if not argv:
-        print(
-            "usage: python -m cc_daemon.cli {serve|status|stop|logs|rotate-token} [options]",
-            file=sys.stderr,
-        )
-        return 2
+    if not argv or argv[0] in ("-h", "--help"):
+        # Top-level help goes to stdout (the usual convention) and exits 0;
+        # only the no-args / unknown-subcommand cases go to stderr with code 2.
+        if not argv:
+            print(_USAGE, file=sys.stderr)
+            return 2
+        print(_USAGE)
+        return 0
 
     cmd = argv[0]
     if cmd == "serve":
@@ -293,7 +314,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         from commands.daemon_cmd import dispatch as _daemon_dispatch
         return _daemon_dispatch(argv)
 
-    print(f"unknown subcommand: {cmd}", file=sys.stderr)
+    print(f"unknown subcommand: {cmd}\n", file=sys.stderr)
+    print(_USAGE, file=sys.stderr)
     return 2
 
 

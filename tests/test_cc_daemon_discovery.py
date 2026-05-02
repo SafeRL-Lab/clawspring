@@ -36,6 +36,21 @@ def test_make_info_started_at_is_iso_utc():
     assert "T" in info["started_at"]
 
 
+def test_make_info_omits_token_path_by_default():
+    info = discovery.make_info(pid=1, transport="tcp",
+                                address="127.0.0.1:8765", version="x")
+    assert "token_path" not in info
+
+
+def test_make_info_records_token_path_when_overridden():
+    info = discovery.make_info(pid=1, transport="tcp",
+                                address="127.0.0.1:8765", version="x",
+                                token_path="/tmp/custom-token")
+    assert info["token_path"] == "/tmp/custom-token"
+    # Schema does not bump — token_path is a strictly additive optional field.
+    assert info["schema"] == discovery.SCHEMA_VERSION
+
+
 # ── write / read ────────────────────────────────────────────────────────────
 
 def test_write_then_read_roundtrip(tmp_path: Path):
