@@ -46,9 +46,15 @@ def _resolve(path: Optional[Path]) -> Path:
 # ── Info builder ───────────────────────────────────────────────────────────
 
 def make_info(*, pid: int, transport: str, address: str,
-              version: str) -> dict:
-    """Build a discovery dict ready for :func:`write`."""
-    return {
+              version: str, token_path: Optional[str] = None) -> dict:
+    """Build a discovery dict ready for :func:`write`.
+
+    ``token_path`` is recorded only when the daemon was started with a
+    non-default --token-path so daemon-control verbs (status / stop /
+    rotate-token) can find the token the daemon is actually using.
+    Schema stays at version 1 — this is a strictly additive field.
+    """
+    info: dict = {
         "pid":        pid,
         "started_at": datetime.datetime.now(datetime.timezone.utc)
                               .strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -57,6 +63,9 @@ def make_info(*, pid: int, transport: str, address: str,
         "version":    version,
         "schema":     SCHEMA_VERSION,
     }
+    if token_path is not None:
+        info["token_path"] = token_path
+    return info
 
 
 # ── Read / write / clear ───────────────────────────────────────────────────

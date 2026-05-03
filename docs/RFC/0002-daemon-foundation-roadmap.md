@@ -10,7 +10,7 @@ The "foundation PR" described at the end of [RFC 0001](./0001-daemon-design-note
 
 | ID  | Scope                                               | Depends on | Est LoC | Status |
 |-----|-----------------------------------------------------|------------|---------|--------|
-| F-1 | `daemon/` package skeleton; `serve` + `daemon` CLI  | —          | ~1500   | OPEN   |
+| F-1 | `daemon/` package skeleton; `serve` + `daemon` CLI  | —          | ~1500   | MERGED #80 |
 | F-2 | SQLite schema + originator-tracked permission flow  | F-1        | ~600    | TODO   |
 | F-3 | `monitor/scheduler` runs in daemon                  | F-2        | ~500    | TODO   |
 | F-4 | `agent_runner` becomes subprocess-per-agent         | F-2        | ~1000   | TODO   |

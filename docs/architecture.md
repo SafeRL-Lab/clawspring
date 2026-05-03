@@ -740,8 +740,12 @@ Added by the F-1 foundation:
 
 - `cc_daemon/discovery.py` — atomic write/read of
   `~/.cheetahclaws/daemon.json` (pid, transport, address, started_at,
-  schema version) so REPL / Web / bridge clients can locate the daemon.
-  Auto-clears stale files when the recorded pid is no longer alive.
+  schema version, plus an optional `token_path` recorded only when
+  `serve --token-path` overrides the default location) so REPL / Web /
+  bridge clients — and `cheetahclaws daemon {status, stop, rotate-token}`
+  themselves — can locate the daemon and the token file it's actually
+  using.  Auto-clears stale files when the recorded pid is no longer
+  alive.
 - `cc_daemon/system_methods.py` — registers `system.ping` (RFC contract
   name; coexists with spike's `echo.ping`) and `system.shutdown`
   (triggers `DaemonState.shutdown_event`, our cross-platform graceful

@@ -138,3 +138,27 @@ def test_seconds_since_handles_recent_iso():
 
 def test_seconds_since_returns_none_for_garbage():
     assert daemon_cmd._seconds_since("not a date") is None
+
+
+# ── _resolve_token_path ────────────────────────────────────────────────────
+
+def test_resolve_token_path_falls_back_to_default_when_info_is_none():
+    out = daemon_cmd._resolve_token_path(None)
+    assert out == daemon_cmd._default_token_path()
+
+
+def test_resolve_token_path_falls_back_when_info_lacks_field():
+    out = daemon_cmd._resolve_token_path({"transport": "tcp"})
+    assert out == daemon_cmd._default_token_path()
+
+
+def test_resolve_token_path_uses_recorded_path_when_present(tmp_path):
+    custom = tmp_path / "custom-token"
+    info = {"transport": "tcp", "token_path": str(custom)}
+    out = daemon_cmd._resolve_token_path(info)
+    assert out == custom
+
+
+def test_resolve_token_path_ignores_empty_string():
+    out = daemon_cmd._resolve_token_path({"token_path": ""})
+    assert out == daemon_cmd._default_token_path()

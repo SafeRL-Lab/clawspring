@@ -161,7 +161,9 @@ def test_daemon_writes_discovery_and_token(daemon_proc):
     assert info["address"] == address
     assert info["pid"] > 0
     assert info["schema"] == 1
-    assert len(token) >= 32
+    # secrets.token_urlsafe(32) yields ~43 base64-url chars; floor at 40 so
+    # an accidental shrink to 16 raw bytes (~22 chars) breaks loudly.
+    assert len(token) >= 40
 
 
 # ── RPC ────────────────────────────────────────────────────────────────────
