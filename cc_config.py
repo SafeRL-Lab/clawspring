@@ -68,6 +68,19 @@ DEFAULTS = {
     # "qwen_api_key":      "..."
     # "zhipu_api_key":     "..."
     # "deepseek_api_key":  "..."
+    # ── WeChat smart-reply (off by default) ────────────────────────────────
+    # When enabled, inbound messages from whitelisted contacts no longer
+    # auto-reply via the agent.  Instead the auxiliary cheap model drafts
+    # 3 candidate replies and pushes them to the user's `filehelper`
+    # (文件传输助手) chat for approval.  See bridges/wechat_smart_reply.py.
+    "wechat_smart_reply":                  False,
+    "wechat_smart_reply_whitelist":        [],     # list of from_user_id strings
+    "wechat_smart_reply_groups":           False,  # also draft for group messages
+    "wechat_smart_reply_groups_at_only":   False,  # in groups, only when @<self>
+    "wechat_smart_reply_timeout_s":        300,    # panel expiry seconds
+    # WeChat self nickname — needed for groups_at_only matching.  Not set
+    # automatically; user provides via config or `/wechat self <nickname>`.
+    "wechat_self_nickname":                "",
 }
 
 
